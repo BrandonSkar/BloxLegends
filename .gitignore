@@ -1,9 +1,9 @@
 # Project place file (working copy — open this in Studio)
-/BloxLegends.rbxlx
+BloxLegends.rbxlx
 
 # Roblox Studio lock files
-/*.rbxlx.lock
-/*.rbxl.lock
+*.rbxlx.lock
+*.rbxl.lock
 
 # Rojo sourcemap (regenerated locally)
 sourcemap.json
