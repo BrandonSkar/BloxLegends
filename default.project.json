@@ -1,0 +1,63 @@
+{
+  "name": "BloxLegends",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "Shared": {
+        "$path": "src/shared"
+      }
+    },
+
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/server"
+      }
+    },
+
+    "Players": {
+      "$properties": {
+        "CharacterAutoLoads": false,
+        "RespawnTime": 999
+      }
+    },
+
+    "StarterPlayer": {
+      "$properties": {
+        "CharacterWalkSpeed": 16,
+        "CharacterJumpPower": 0,
+        "CharacterUseJumpPower": true,
+        "AutoJumpEnabled": false,
+        "CameraMode": "Classic",
+        "CameraMaxZoomDistance": 16,
+        "CameraMinZoomDistance": 16
+      },
+      "StarterPlayerScripts": {
+        "Client": {
+          "$path": "src/client"
+        }
+      }
+    },
+
+    "Workspace": {
+      "$properties": {
+        "FilteringEnabled": true,
+        "Gravity": 80
+      }
+    },
+
+    "Lighting": {
+      "$properties": {
+        "Brightness": 2,
+        "GlobalShadows": true,
+        "Technology": "Voxel"
+      }
+    },
+
+    "SoundService": {
+      "$properties": {
+        "RespectFilteringEnabled": true
+      }
+    }
+  }
+}

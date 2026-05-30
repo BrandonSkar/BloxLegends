@@ -1,0 +1,15 @@
+# Project place file (working copy — open this in Studio)
+/BloxLegends.rbxlx
+
+# Roblox Studio lock files
+/*.rbxlx.lock
+/*.rbxl.lock
+
+# Rojo sourcemap (regenerated locally)
+sourcemap.json
+
+# Throwaway build artifact (we rebuild this with rojo build)
+/test-build.rbxlx
+
+# Claude Code local config (per-developer; not shared)
+.claude/
