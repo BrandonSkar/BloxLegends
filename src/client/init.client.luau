@@ -38,12 +38,14 @@ targeting:start()
 caster:setTargetingController(targeting)
 
 local indicatorController = AbilityIndicatorController.new(camera, targeting)
+indicatorController:setAbilityCaster(caster)
 indicatorController:start()
 caster:setIndicatorController(indicatorController)
 -- TargetingController needs the BushController (for hidden-enemy filtering)
 -- — both are created below; we wire after construction.
 
 local hud = HUD.create(playerGui)
+hud:setCameraController(camera)
 hud:setVisible(false)
 
 local lobbyUI = LobbyUI.create(playerGui)
@@ -86,6 +88,10 @@ end)
 
 hud.abilityInputBegan = function(slot)
 	caster:startTouchPreview(slot)
+end
+
+hud.abilityInputChanged = function(slot, direction, rangePct, isCancelled)
+	caster:updateTouchAim(slot, direction, rangePct, isCancelled)
 end
 
 hud.abilityInputEnded = function(slot, shouldCast)

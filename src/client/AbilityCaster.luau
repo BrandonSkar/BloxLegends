@@ -29,6 +29,13 @@ function AbilityCaster.new(cameraController)
 	self.previewingSlot = nil
 	self.localCooldowns = {}
 	self.connections = {}
+
+	-- Touch Aiming Joystick maps
+	self.touchAimActive = {}
+	self.aimedDirection = {}
+	self.aimedPosition = {}
+	self.isCancelledTouch = {}
+
 	return self
 end
 
@@ -53,6 +60,13 @@ function AbilityCaster:_isReady(slot)
 end
 
 function AbilityCaster:cancelPreview()
+	local slot = self.previewingSlot
+	if slot then
+		self.touchAimActive[slot] = nil
+		self.aimedDirection[slot] = nil
+		self.aimedPosition[slot] = nil
+		self.isCancelledTouch[slot] = nil
+	end
 	self.previewingSlot = nil
 	if self.indicatorController then
 		self.indicatorController:clearPreview()
@@ -80,8 +94,35 @@ function AbilityCaster:startTouchPreview(slot)
 	end
 
 	self.previewingSlot = slot
+	self.previewStartTimes = self.previewStartTimes or {}
+	self.previewStartTimes[slot] = os.clock()
 	if self.indicatorController then
 		self.indicatorController:startPreview(slot, ability)
+	end
+end
+
+-- Hook for HUD mobile aiming joystick to update coordinates
+function AbilityCaster:updateTouchAim(slot, direction, rangePct, isCancelled)
+	if self.previewingSlot == slot then
+		local champ = Champions.Roster[self.championKey]
+		local ability = champ and champ.Abilities[slot]
+		if slot == "Space" and not ability then
+			local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+			local Runes = require(Shared:WaitForChild("Runes"))
+			local entry = self.player.Character and self.player.Character:GetAttribute("SummonerSpell")
+			local spellKey = entry or Runes.DefaultSummonerSpell
+			ability = Runes.SummonerSpells[spellKey]
+		end
+
+		local maxRange = ability and (ability.Range or ability.Length or 30) or 30
+		local char = self.player.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		local origin = root and root.Position or Vector3.zero
+
+		self.touchAimActive[slot] = true
+		self.aimedDirection[slot] = direction
+		self.aimedPosition[slot] = origin + direction * (maxRange * rangePct)
+		self.isCancelledTouch[slot] = isCancelled
 	end
 end
 
@@ -132,6 +173,54 @@ function AbilityCaster:_cast(slot)
 		groundY = hit.Position.Y
 	end
 	local targetPos = self.camera:getGroundTarget(groundY)
+
+	-- Apply Touch Aim Joystick overrides if active and not cancelled
+	if self.touchAimActive[slot] and not self.isCancelledTouch[slot] then
+		direction = self.aimedDirection[slot] or direction
+		targetPos = self.aimedPosition[slot] or targetPos
+	else
+		-- Check if it's a Quick Cast (tapping quickly)
+		local isQuickCast = true
+		if not UserInputService.TouchEnabled then
+			local startTime = self.previewStartTimes and self.previewStartTimes[slot]
+			if startTime and (os.clock() - startTime) >= 0.2 then
+				isQuickCast = false
+			end
+		end
+
+		if isQuickCast then
+			-- Quick Cast: Tapping quickly. Performs cast in direction camera is facing,
+			-- or snapped to the locked target if one exists.
+			local activeTarget = self.targetingController and self.targetingController:getTarget()
+			if activeTarget then
+				local targetModel = nil
+				if activeTarget.type == "player" then
+					local p = Players:GetPlayerByUserId(activeTarget.id)
+					targetModel = p and p.Character
+				elseif activeTarget.type == "minion" then
+					local bin = workspace:FindFirstChild("Minions")
+					if bin then
+						for _, mModel in ipairs(bin:GetChildren()) do
+							if mModel:GetAttribute("MinionId") == activeTarget.id then
+								targetModel = mModel
+								break
+							end
+						end
+					end
+				end
+
+				local tRoot = targetModel and targetModel:FindFirstChild("HumanoidRootPart")
+				if tRoot then
+					local diff = tRoot.Position - root.Position
+					local flatDiff = Vector3.new(diff.X, 0, diff.Z)
+					if flatDiff.Magnitude > 0.01 then
+						direction = flatDiff.Unit
+					end
+					targetPos = tRoot.Position
+				end
+			end
+		end
+	end
 
 	-- For target-cast / leap_to_target, include the locked target id so the
 	-- server can resolve the enemy without an extra round trip. Minion targets

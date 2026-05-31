@@ -140,8 +140,14 @@ function AbilityIndicatorController:_getPotentialTargets()
 	return list
 end
 
+
+
+function AbilityIndicatorController:setAbilityCaster(caster)
+	self.caster = caster
+end
+
 -- Paints targets using a single-frame simulated dry run of the ability physics
-function AbilityIndicatorController:_runTargetPainting(ability, origin, direction, targetPos, targetType, targetId)
+function AbilityIndicatorController:_runTargetPainting(ability, origin, direction, targetPos, targetType, targetId, customColor)
 	local mockSim = AbilityPhysics.new(ability, origin, direction, targetPos, targetType, targetId)
 	local potential = self:_getPotentialTargets()
 	local predicted = {}
@@ -159,7 +165,7 @@ function AbilityIndicatorController:_runTargetPainting(ability, origin, directio
 
 	-- Apply highlights to predicted targets
 	local nextHighlights = {}
-	local highlightColor = ability.Color or Color3.fromRGB(255, 70, 70)
+	local highlightColor = customColor or ability.Color or Color3.fromRGB(255, 70, 70)
 
 	for target, _ in pairs(predicted) do
 		local model = target:IsA("Player") and target.Character or target
@@ -173,6 +179,8 @@ function AbilityIndicatorController:_runTargetPainting(ability, origin, directio
 				hl.OutlineTransparency = 0.2
 				hl.Adornee = model
 				hl.Parent = model
+			else
+				hl.FillColor = highlightColor
 			end
 			nextHighlights[model] = hl
 			self.highlights[model] = nil -- keep in next map
@@ -219,6 +227,21 @@ function AbilityIndicatorController:updatePreview()
 	end
 	local targetPos = self.camera:getGroundTarget(groundY)
 
+	-- Overrides for Touch Aiming Joystick if active
+	local customDirection, customTargetPos, isCancelled = nil, nil, false
+	if self.activePreview and self.caster and self.caster.touchAimActive[self.activePreview] then
+		customDirection = self.caster.aimedDirection[self.activePreview]
+		customTargetPos = self.caster.aimedPosition[self.activePreview]
+		isCancelled = self.caster.isCancelledTouch[self.activePreview] or false
+	end
+
+	if customDirection then
+		direction = customDirection
+	end
+	if customTargetPos then
+		targetPos = customTargetPos
+	end
+
 	-- Check autotarget locked targets
 	local targetType, targetId
 	local activeTarget = self.targeting and self.targeting:getTarget()
@@ -228,7 +251,11 @@ function AbilityIndicatorController:updatePreview()
 
 	-- Create simulation to query coordinates
 	local sim = AbilityPhysics.new(self.activeAbility, origin, direction, targetPos, targetType, targetId)
+	
 	local color = self.activeAbility.Color or Color3.fromRGB(0, 170, 255)
+	if isCancelled then
+		color = Color3.fromRGB(255, 60, 60)
+	end
 
 	-- 1) Draw Range Ring around Caster (for circular or target casts)
 	local maxRange = self.activeAbility.Range or self.activeAbility.Length or 40
@@ -236,9 +263,10 @@ function AbilityIndicatorController:updatePreview()
 		self.rangePart = buildHologramPart("cylinder", color, Vector3.new(0.08, maxRange * 2, maxRange * 2), self.folder)
 		self.rangePart.Name = "RangeIndicator"
 	end
+	self.rangePart.Color = color
 	self.rangePart.Size = Vector3.new(0.08, maxRange * 2, maxRange * 2)
-	-- Offset Y to groundY + 0.03 to avoid Z-fighting with ground floor geometry
-	self.rangePart.CFrame = CFrame.new(Vector3.new(origin.X, groundY + 0.03, origin.Z)) * CFrame.Angles(0, 0, math.rad(90))
+	-- Offset Y to groundY + 0.08 to avoid Z-fighting with ground floor geometry
+	self.rangePart.CFrame = CFrame.new(Vector3.new(origin.X, groundY + 0.08, origin.Z)) * CFrame.Angles(0, 0, math.rad(90))
 
 	-- 2) Draw Shape indicator based on Ability type
 	if self.type == "projectile" or self.activeAbility.Type == "projectile" or self.activeAbility.Type == "line_skillshot" then
@@ -250,11 +278,12 @@ function AbilityIndicatorController:updatePreview()
 			self.impactPart = buildHologramPart("block", color, Vector3.new(width, 0.12, length), self.folder)
 			self.impactPart.Name = "LineIndicator"
 		end
+		self.impactPart.Color = color
 		self.impactPart.Size = Vector3.new(width, 0.12, length)
 
-		-- Center is half length forward. Offset Y to groundY + 0.06 to stack on top of the range ring.
+		-- Center is half length forward. Offset Y to groundY + 0.16 to stack on top of the range ring.
 		local centerPos = origin + sim.direction * (length / 2)
-		self.impactPart.CFrame = CFrame.lookAt(Vector3.new(centerPos.X, groundY + 0.06, centerPos.Z), Vector3.new(centerPos.X, groundY + 0.06, centerPos.Z) + sim.direction)
+		self.impactPart.CFrame = CFrame.lookAt(Vector3.new(centerPos.X, groundY + 0.16, centerPos.Z), Vector3.new(centerPos.X, groundY + 0.16, centerPos.Z) + sim.direction)
 
 	elseif self.activeAbility.Type == "ground_aoe" or self.activeAbility.Type == "volley" then
 		-- Ground circle
@@ -263,9 +292,10 @@ function AbilityIndicatorController:updatePreview()
 			self.impactPart = buildHologramPart("cylinder", color, Vector3.new(0.12, radius * 2, radius * 2), self.folder)
 			self.impactPart.Name = "AoEIndicator"
 		end
+		self.impactPart.Color = color
 		self.impactPart.Size = Vector3.new(0.12, radius * 2, radius * 2)
-		-- Offset Y to groundY + 0.06 to prevent Z-fighting overlaps.
-		self.impactPart.CFrame = CFrame.new(Vector3.new(sim.targetPos.X, groundY + 0.06, sim.targetPos.Z)) * CFrame.Angles(0, 0, math.rad(90))
+		-- Offset Y to groundY + 0.16 to prevent Z-fighting overlaps.
+		self.impactPart.CFrame = CFrame.new(Vector3.new(sim.targetPos.X, groundY + 0.16, sim.targetPos.Z)) * CFrame.Angles(0, 0, math.rad(90))
 
 	elseif self.activeAbility.Type == "dash" then
 		-- Arrow path
@@ -274,10 +304,11 @@ function AbilityIndicatorController:updatePreview()
 			self.impactPart = buildHologramPart("block", color, Vector3.new(4, 0.12, dist), self.folder)
 			self.impactPart.Name = "DashIndicator"
 		end
+		self.impactPart.Color = color
 		self.impactPart.Size = Vector3.new(4, 0.12, dist)
 		local centerPos = origin + sim.direction * (dist / 2)
-		-- Offset Y to groundY + 0.06.
-		self.impactPart.CFrame = CFrame.lookAt(Vector3.new(centerPos.X, groundY + 0.06, centerPos.Z), Vector3.new(centerPos.X, groundY + 0.06, centerPos.Z) + sim.direction)
+		-- Offset Y to groundY + 0.16.
+		self.impactPart.CFrame = CFrame.lookAt(Vector3.new(centerPos.X, groundY + 0.16, centerPos.Z), Vector3.new(centerPos.X, groundY + 0.16, centerPos.Z) + sim.direction)
 
 	elseif self.activeAbility.Type == "target_cast" or self.activeAbility.Type == "leap_to_target" then
 		-- Target highlight
@@ -308,6 +339,7 @@ function AbilityIndicatorController:updatePreview()
 					self.impactPart = buildHologramPart("cylinder", color, Vector3.new(0.2, 8, 8), self.folder)
 					self.impactPart.Name = "TargetLockRing"
 				end
+				self.impactPart.Color = color
 				self.impactPart.CFrame = CFrame.new(Vector3.new(tPos.X, tPos.Y - 2.5, tPos.Z)) * CFrame.Angles(0, 0, math.rad(90))
 
 				-- Connecting vector beam
@@ -321,6 +353,7 @@ function AbilityIndicatorController:updatePreview()
 					pcall(function() self.beamPart.Transparency = 0.4 end)
 					self.beamPart.Name = "TargetLockBeam"
 				end
+				self.beamPart.Color = color
 				self.beamPart.Size = Vector3.new(0.25, 0.25, diff.Magnitude)
 				self.beamPart.CFrame = CFrame.lookAt(mid, to)
 			else
@@ -338,7 +371,7 @@ function AbilityIndicatorController:updatePreview()
 	end
 
 	-- 3) Run Predictive Target Painting (highlights all targets hit in simulation)
-	self:_runTargetPainting(self.activeAbility, origin, direction, targetPos, targetType, targetId)
+	self:_runTargetPainting(self.activeAbility, origin, direction, targetPos, targetType, targetId, color)
 end
 
 function AbilityIndicatorController:start()

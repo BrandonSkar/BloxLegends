@@ -172,13 +172,85 @@ function HUD.create(playerGui)
 	layout.Parent = bar
 
 	self.abilityInputBegan = nil
+	self.abilityInputChanged = nil
 	self.abilityInputEnded = nil
+
+	self.touchStartPos = {}
+	self.dragActive = {}
+	self.isCancelled = {}
+	self.activeInput = {}
+
+	local UserInputService = game:GetService("UserInputService")
+
+	UserInputService.InputChanged:Connect(function(input, processed)
+		for slot, activeInput in pairs(self.activeInput) do
+			if input == activeInput then
+				local startPos = self.touchStartPos[slot]
+				if startPos then
+					local currentPos = input.Position
+					local dragVector = Vector2.new(currentPos.X - startPos.X, currentPos.Y - startPos.Y)
+					local dist = dragVector.Magnitude
+
+					if dist > 15 then
+						self.dragActive[slot] = true
+						local dragDir = dragVector.Unit
+
+						-- Rotate aiming 2D screen coordinate by camera yaw
+						local yaw = self.camera and self.camera:getYaw() or 0
+						local local3D = Vector3.new(dragDir.X, 0, dragDir.Y)
+						local aimedWorldDir = CFrame.fromOrientation(0, yaw, 0):VectorToWorldSpace(local3D)
+						aimedWorldDir = Vector3.new(aimedWorldDir.X, 0, aimedWorldDir.Z)
+						aimedWorldDir = aimedWorldDir.Magnitude > 0.01 and aimedWorldDir.Unit or Vector3.new(0, 0, 1)
+
+						-- Aiming range factor clamped to max drag length of 90 pixels
+						local rangePct = math.clamp(dist / 90, 0, 1)
+
+						-- Check cancellation: Dragged extremely far (150+ px) OR dragged and returned back to button center (< 15 px)
+						local cancelled = (dist > 150) or (self.dragActive[slot] and dist < 15)
+						self.isCancelled[slot] = cancelled
+
+						if self.abilityInputChanged then
+							self.abilityInputChanged(slot, aimedWorldDir, rangePct, cancelled)
+						end
+					else
+						-- Inside deadzone
+						if self.dragActive[slot] then
+							self.isCancelled[slot] = true
+							if self.abilityInputChanged then
+								self.abilityInputChanged(slot, Vector3.new(0, 0, 1), 0, true)
+							end
+						end
+					end
+				end
+			end
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input, processed)
+		for slot, activeInput in pairs(self.activeInput) do
+			if input == activeInput then
+				self.activeInput[slot] = nil
+				self.touchStartPos[slot] = nil
+				local cancelled = self.isCancelled[slot] or false
+				self.dragActive[slot] = nil
+				self.isCancelled[slot] = nil
+
+				if self.abilityInputEnded then
+					self.abilityInputEnded(slot, not cancelled)
+				end
+			end
+		end
+	end)
 
 	RunService.RenderStepped:Connect(function()
 		self:_tick()
 	end)
 
 	return self
+end
+
+function HUD:setCameraController(cameraController)
+	self.camera = cameraController
 end
 
 function HUD:setChampion(championKey)
@@ -263,7 +335,7 @@ function HUD:setChampion(championKey)
 
 			self.slotFrames[slot] = { overlay = overlay, text = cdText, duration = 0, frame = frame }
 
-			-- Mobile Interactive Touch Overlays (Drag-to-cancel support)
+			-- Mobile Interactive Touch Overlays (Radial drag-to-aim and drag-off/back-home cancellation)
 			local touchBtn = Instance.new("ImageButton")
 			touchBtn.Name = "TouchOverlay"
 			touchBtn.Size = UDim2.fromScale(1, 1)
@@ -276,22 +348,12 @@ function HUD:setChampion(championKey)
 					return
 				end
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					self.activeInput[slot] = input
+					self.touchStartPos[slot] = input.Position
+					self.dragActive[slot] = false
+					self.isCancelled[slot] = false
 					if self.abilityInputBegan then
 						self.abilityInputBegan(slot)
-					end
-				end
-			end)
-
-			touchBtn.InputEnded:Connect(function(input)
-				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-					-- Cancel if dragged more than 100 pixels away from the button's starting touch position
-					local startPos = input.Position
-					local currentPos = game:GetService("UserInputService"):GetMouseLocation()
-					local dist = (currentPos - Vector2.new(startPos.X, startPos.Y)).Magnitude
-					local shouldCast = dist < 100
-
-					if self.abilityInputEnded then
-						self.abilityInputEnded(slot, shouldCast)
 					end
 				end
 			end)
