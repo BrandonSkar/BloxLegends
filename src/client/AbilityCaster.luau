@@ -25,6 +25,8 @@ function AbilityCaster.new(cameraController)
 	self.camera = cameraController
 	self.championKey = nil
 	self.targetingController = nil -- set via setTargetingController for target-cast pickup
+	self.indicatorController = nil -- set via setIndicatorController
+	self.previewingSlot = nil
 	self.localCooldowns = {}
 	self.connections = {}
 	return self
@@ -38,6 +40,10 @@ function AbilityCaster:setTargetingController(tc)
 	self.targetingController = tc
 end
 
+function AbilityCaster:setIndicatorController(ic)
+	self.indicatorController = ic
+end
+
 function AbilityCaster:setCooldown(slot, duration)
 	self.localCooldowns[slot] = os.clock() + duration
 end
@@ -46,12 +52,64 @@ function AbilityCaster:_isReady(slot)
 	return (self.localCooldowns[slot] or 0) <= os.clock()
 end
 
+function AbilityCaster:cancelPreview()
+	self.previewingSlot = nil
+	if self.indicatorController then
+		self.indicatorController:clearPreview()
+	end
+end
+
+-- Hook for HUD mobile buttons to start targeting preview
+function AbilityCaster:startTouchPreview(slot)
+	if not self.championKey then
+		return
+	end
+	local champ = Champions.Roster[self.championKey]
+	local ability = champ and champ.Abilities[slot]
+	if slot == "Space" and not ability then
+		-- Summoner spell
+		local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+		local Runes = require(Shared:WaitForChild("Runes"))
+		local entry = self.player.Character and self.player.Character:GetAttribute("SummonerSpell")
+		local spellKey = entry or Runes.DefaultSummonerSpell
+		ability = Runes.SummonerSpells[spellKey]
+	end
+
+	if not ability or not self:_isReady(slot) then
+		return
+	end
+
+	self.previewingSlot = slot
+	if self.indicatorController then
+		self.indicatorController:startPreview(slot, ability)
+	end
+end
+
+-- Hook for HUD mobile buttons to complete casting or cancel
+function AbilityCaster:endTouchPreview(slot, shouldCast)
+	if self.previewingSlot == slot then
+		if shouldCast then
+			self:_cast(slot)
+		end
+		self:cancelPreview()
+	end
+end
+
 function AbilityCaster:_cast(slot)
 	if not self.championKey then
 		return
 	end
 	local champ = Champions.Roster[self.championKey]
 	local ability = champ and champ.Abilities[slot]
+	if slot == "Space" and not ability then
+		-- Summoner spell helper
+		local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+		local Runes = require(Shared:WaitForChild("Runes"))
+		local entry = self.player.Character and self.player.Character:GetAttribute("SummonerSpell")
+		local spellKey = entry or Runes.DefaultSummonerSpell
+		ability = Runes.SummonerSpells[spellKey]
+	end
+
 	if not ability or not self:_isReady(slot) then
 		return
 	end
@@ -100,6 +158,7 @@ function AbilityCaster:_cast(slot)
 end
 
 function AbilityCaster:start()
+	-- PC hold-to-preview & release-to-cast
 	table.insert(
 		self.connections,
 		UserInputService.InputBegan:Connect(function(input, processed)
@@ -108,7 +167,23 @@ function AbilityCaster:start()
 			end
 			local slot = SLOT_KEYS[input.KeyCode]
 			if slot then
+				self:startTouchPreview(slot)
+			end
+
+			-- Right Click cancels the active preview
+			if input.UserInputType == Enum.UserInputType.MouseButton2 then
+				self:cancelPreview()
+			end
+		end)
+	)
+
+	table.insert(
+		self.connections,
+		UserInputService.InputEnded:Connect(function(input)
+			local slot = SLOT_KEYS[input.KeyCode]
+			if slot and self.previewingSlot == slot then
 				self:_cast(slot)
+				self:cancelPreview()
 			end
 		end)
 	)

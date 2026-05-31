@@ -7,6 +7,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Champions = require(Shared:WaitForChild("Champions"))
 local Runes = require(Shared:WaitForChild("Runes"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
+local AbilityPhysics = require(Shared:WaitForChild("AbilityPhysics"))
 
 local AbilityHandler = {}
 AbilityHandler.__index = AbilityHandler
@@ -200,8 +201,7 @@ local function applyAreaDamage(self, attackerPlayer, attackerTeam, center, radiu
 	-- Enemy minions
 	for _, entry in pairs(self.minionService:allMinions()) do
 		if entry.alive and entry.team ~= attackerTeam then
-			local d = flatDist(entry.root.Position, center)
-			if d <= radius then
+			if AbilityPhysics.checkCircle(entry.root.Position, center, radius) then
 				self.minionService:applyDamage(entry, damage, attackerPlayer)
 				applyStatusToMinion(self, entry, statusOnHit, center, attackerPlayer)
 			end
@@ -213,7 +213,7 @@ local function applyAreaDamage(self, attackerPlayer, attackerTeam, center, radiu
 		if team and self.combatService:isAlive(player) then
 			local char = player.Character
 			local root = char and char:FindFirstChild("HumanoidRootPart")
-			if root and flatDist(root.Position, center) <= radius then
+			if root and AbilityPhysics.checkCircle(root.Position, center, radius) then
 				if team ~= attackerTeam then
 					if damage and damage > 0 then
 						self.combatService:damagePlayer(player, damage, attackerPlayer)
@@ -234,7 +234,7 @@ local function applyAreaDamage(self, attackerPlayer, attackerTeam, center, radiu
 	if self.towerService then
 		for _, tower in pairs(self.towerService:allTowers()) do
 			if tower.alive and tower.team ~= attackerTeam then
-				if flatDist(tower.root.Position, center) <= radius then
+				if AbilityPhysics.checkCircle(tower.root.Position, center, radius) then
 					self.towerService:applyDamage(tower, damage, attackerPlayer)
 				end
 			end
@@ -274,7 +274,7 @@ local function fireProjectile(self, attackerPlayer, attackerTeam, ability, origi
 		end
 		local char = p.Character
 		local root = char and char:FindFirstChild("HumanoidRootPart")
-		if root and flatDist(root.Position, part.Position) <= hitRadius then
+		if root and AbilityPhysics.checkCircle(root.Position, part.Position, hitRadius) then
 			self.combatService:damagePlayer(p, ability.Damage, attackerPlayer)
 			-- Caster position for knockback/pull origin.
 			local casterChar = attackerPlayer.Character
@@ -303,7 +303,7 @@ local function fireProjectile(self, attackerPlayer, attackerTeam, ability, origi
 
 		for _, entry in pairs(self.minionService:allMinions()) do
 			if entry.alive and entry.team ~= attackerTeam then
-				if flatDist(entry.root.Position, part.Position) <= hitRadius then
+				if AbilityPhysics.checkCircle(entry.root.Position, part.Position, hitRadius) then
 					self.minionService:applyDamage(entry, ability.Damage, attackerPlayer)
 					applyStatusToMinion(self, entry, statusOnHit, part.Position, attackerPlayer)
 					alive = false
@@ -326,7 +326,7 @@ local function fireProjectile(self, attackerPlayer, attackerTeam, ability, origi
 		if self.towerService then
 			for _, tower in pairs(self.towerService:allTowers()) do
 				if tower.alive and tower.team ~= attackerTeam then
-					if flatDist(tower.root.Position, part.Position) <= hitRadius then
+					if AbilityPhysics.checkCircle(tower.root.Position, part.Position, hitRadius) then
 						self.towerService:applyDamage(tower, ability.Damage, attackerPlayer)
 						alive = false
 						conn:Disconnect()
@@ -390,7 +390,7 @@ local function fireLineSkillshot(self, attackerPlayer, attackerTeam, ability, or
 		-- Minions
 		for id, entry in pairs(self.minionService:allMinions()) do
 			if entry.alive and entry.team ~= attackerTeam and not hitMinions[id] then
-				if flatDist(entry.root.Position, pos) <= width then
+				if AbilityPhysics.checkCircle(entry.root.Position, pos, width) then
 					self.minionService:applyDamage(entry, ability.Damage, attackerPlayer)
 					applyStatusToMinion(self, entry, statusOnHit, origin, attackerPlayer)
 					hitMinions[id] = true
@@ -403,7 +403,7 @@ local function fireLineSkillshot(self, attackerPlayer, attackerTeam, ability, or
 			if team and team ~= attackerTeam and not hitChampions[p.UserId] and self.combatService:isAlive(p) then
 				local char = p.Character
 				local root = char and char:FindFirstChild("HumanoidRootPart")
-				if root and flatDist(root.Position, pos) <= width then
+				if root and AbilityPhysics.checkCircle(root.Position, pos, width) then
 					self.combatService:damagePlayer(p, ability.Damage, attackerPlayer)
 					applyStatusOnHit(self, p, statusOnHit, origin)
 					hitChampions[p.UserId] = true
@@ -414,7 +414,7 @@ local function fireLineSkillshot(self, attackerPlayer, attackerTeam, ability, or
 		if self.towerService then
 			for _, tower in pairs(self.towerService:allTowers()) do
 				if tower.alive and tower.team ~= attackerTeam and not hitTowers[tower.id] then
-					if flatDist(tower.root.Position, pos) <= width then
+					if AbilityPhysics.checkCircle(tower.root.Position, pos, width) then
 						self.towerService:applyDamage(tower, ability.Damage, attackerPlayer)
 						hitTowers[tower.id] = true
 					end
@@ -684,7 +684,7 @@ local function dash(self, player, ability, direction)
 					if pTeam and pTeam ~= attackerTeam and self.combatService:isAlive(p) then
 						local pChar = p.Character
 						local pRoot = pChar and pChar:FindFirstChild("HumanoidRootPart")
-						if pRoot and flatDist(pRoot.Position, hrp.Position) <= 4 then
+						if pRoot and AbilityPhysics.checkCircle(pRoot.Position, hrp.Position, 4) then
 							pushedSet[p.UserId] = true
 							if ability.KnockbackDamage then
 								self.combatService:damagePlayer(p, ability.KnockbackDamage, player)
@@ -703,7 +703,7 @@ local function dash(self, player, ability, direction)
 			for _, mEntry in pairs(self.minionService:allMinions()) do
 				local key = "m" .. tostring(mEntry.id)
 				if mEntry.alive and mEntry.isDummy and not pushedSet[key] then
-					if flatDist(mEntry.root.Position, hrp.Position) <= 4 then
+					if AbilityPhysics.checkCircle(mEntry.root.Position, hrp.Position, 4) then
 						pushedSet[key] = true
 						if ability.KnockbackDamage then
 							self.minionService:applyDamage(mEntry, ability.KnockbackDamage, player)

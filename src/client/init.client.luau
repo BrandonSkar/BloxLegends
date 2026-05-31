@@ -8,6 +8,7 @@ local CameraController = require(script:WaitForChild("CameraController"))
 local MovementController = require(script:WaitForChild("MovementController"))
 local AbilityCaster = require(script:WaitForChild("AbilityCaster"))
 local TargetingController = require(script:WaitForChild("TargetingController"))
+local AbilityIndicatorController = require(script:WaitForChild("AbilityIndicatorController"))
 local HUD = require(script:WaitForChild("HUD"))
 local LobbyUI = require(script:WaitForChild("LobbyUI"))
 local BushController = require(script:WaitForChild("BushController"))
@@ -35,6 +36,10 @@ caster:start()
 local targeting = TargetingController.new(camera)
 targeting:start()
 caster:setTargetingController(targeting)
+
+local indicatorController = AbilityIndicatorController.new(camera, targeting)
+indicatorController:start()
+caster:setIndicatorController(indicatorController)
 -- TargetingController needs the BushController (for hidden-enemy filtering)
 -- — both are created below; we wire after construction.
 
@@ -79,6 +84,14 @@ targeting:onChanged(function(target)
 	reticle:setTarget(target)
 end)
 
+hud.abilityInputBegan = function(slot)
+	caster:startTouchPreview(slot)
+end
+
+hud.abilityInputEnded = function(slot, shouldCast)
+	caster:endTouchPreview(slot, shouldCast)
+end
+
 -- =====================================================================
 -- Server state → client UI mode
 -- =====================================================================
@@ -97,6 +110,7 @@ local function applyState(state, _zoneId)
 		towerHUD:setVisible(false)
 		recall:setEnabled(false)
 		championSelect:hide()
+		indicatorController:clearPreview()
 	end
 end
 

@@ -153,17 +153,26 @@ function HUD.create(playerGui)
 	-- ===== Ability bar (built in setChampion) =====
 	local bar = Instance.new("Frame")
 	bar.Name = "AbilityBar"
-	bar.AnchorPoint = Vector2.new(0.5, 1)
-	bar.Position = UDim2.new(0.5, 0, 1, -32)
+	if game:GetService("UserInputService").TouchEnabled then
+		bar.AnchorPoint = Vector2.new(1, 1)
+		bar.Position = UDim2.new(1, -24, 1, -24)
+	else
+		bar.AnchorPoint = Vector2.new(0.5, 1)
+		bar.Position = UDim2.new(0.5, 0, 1, -32)
+	end
 	bar.BackgroundTransparency = 1
 	bar.Parent = screen
 	self.bar = bar
+	
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Horizontal
 	layout.Padding = UDim.new(0, 10)
 	layout.SortOrder = Enum.SortOrder.LayoutOrder
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	layout.Parent = bar
+
+	self.abilityInputBegan = nil
+	self.abilityInputEnded = nil
 
 	RunService.RenderStepped:Connect(function()
 		self:_tick()
@@ -253,6 +262,39 @@ function HUD:setChampion(championKey)
 			cdText.TextSize = 22
 
 			self.slotFrames[slot] = { overlay = overlay, text = cdText, duration = 0, frame = frame }
+
+			-- Mobile Interactive Touch Overlays (Drag-to-cancel support)
+			local touchBtn = Instance.new("ImageButton")
+			touchBtn.Name = "TouchOverlay"
+			touchBtn.Size = UDim2.fromScale(1, 1)
+			touchBtn.BackgroundTransparency = 1
+			touchBtn.ZIndex = 5
+			touchBtn.Parent = frame
+
+			touchBtn.InputBegan:Connect(function(input, processed)
+				if processed then
+					return
+				end
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					if self.abilityInputBegan then
+						self.abilityInputBegan(slot)
+					end
+				end
+			end)
+
+			touchBtn.InputEnded:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					-- Cancel if dragged more than 100 pixels away from the button's starting touch position
+					local startPos = input.Position
+					local currentPos = game:GetService("UserInputService"):GetMouseLocation()
+					local dist = (currentPos - Vector2.new(startPos.X, startPos.Y)).Magnitude
+					local shouldCast = dist < 100
+
+					if self.abilityInputEnded then
+						self.abilityInputEnded(slot, shouldCast)
+					end
+				end
+			end)
 		end
 	end
 end

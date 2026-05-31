@@ -18,12 +18,14 @@ function CameraController.new()
 	self.yaw = 0
 	self.pitch = math.rad(-15)
 	self.mouseLook = false
+	self.activeTouch = nil
+	self.lastTouchPos = nil
 	self.connections = {}
 	return self
 end
 
 function CameraController:isMouseLook()
-	return self.mouseLook
+	return self.mouseLook or self.activeTouch ~= nil
 end
 
 function CameraController:getYaw()
@@ -66,6 +68,42 @@ function CameraController:start()
 		if input.UserInputType == Enum.UserInputType.MouseMovement and self.mouseLook then
 			self.yaw = self.yaw - input.Delta.X * MOUSE_SENSITIVITY
 			self.pitch = math.clamp(self.pitch - input.Delta.Y * MOUSE_SENSITIVITY, MIN_PITCH, MAX_PITCH)
+		end
+	end))
+
+	-- Tablet / Mobile Screen-Drag Touch Looking Gesture support
+	table.insert(self.connections, UserInputService.TouchStarted:Connect(function(input, processed)
+		if processed then
+			return
+		end
+		-- Ignore touch if it starts in the bottom-left region (reserved for dynamic virtual movement thumbstick)
+		local viewport = workspace.CurrentCamera.ViewportSize
+		if input.Position.X < viewport.X * 0.45 and input.Position.Y > viewport.Y * 0.45 then
+			return
+		end
+		if not self.activeTouch then
+			self.activeTouch = input
+			self.lastTouchPos = input.Position
+		end
+	end))
+
+	table.insert(self.connections, UserInputService.TouchMoved:Connect(function(input, processed)
+		if input == self.activeTouch then
+			local currentPos = input.Position
+			if self.lastTouchPos then
+				local delta = currentPos - self.lastTouchPos
+				local TOUCH_SENSITIVITY = 0.0055 -- calibrated for touchscreen
+				self.yaw = self.yaw - delta.X * TOUCH_SENSITIVITY
+				self.pitch = math.clamp(self.pitch - delta.Y * TOUCH_SENSITIVITY, MIN_PITCH, MAX_PITCH)
+			end
+			self.lastTouchPos = currentPos
+		end
+	end))
+
+	table.insert(self.connections, UserInputService.TouchEnded:Connect(function(input, processed)
+		if input == self.activeTouch then
+			self.activeTouch = nil
+			self.lastTouchPos = nil
 		end
 	end))
 

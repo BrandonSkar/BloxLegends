@@ -70,25 +70,39 @@ function MovementController:_tick()
 		rightAxis = rightAxis - 1
 	end
 
-	if forwardAxis == 0 and rightAxis == 0 then
-		humanoid:Move(Vector3.zero, false)
+	local moveDir = nil
+	local keyboardMovement = (forwardAxis ~= 0 or rightAxis ~= 0)
+
+	if keyboardMovement then
+		-- Rotate (right, _, forward) by camera yaw so W is always camera-forward.
+		local yaw = self.camera:getYaw()
+		local local3 = Vector3.new(rightAxis, 0, forwardAxis)
+		local world = CFrame.fromOrientation(0, yaw, 0):VectorToWorldSpace(local3)
+		local flatWorld = Vector3.new(world.X, 0, world.Z)
+		if flatWorld.Magnitude > 0.01 then
+			moveDir = flatWorld.Unit
+		end
+	elseif humanoid.MoveDirection.Magnitude > 0.01 then
+		-- Fall back to native mobile / thumbstick movement direction
+		moveDir = humanoid.MoveDirection.Unit
+	end
+
+	-- If no active movement direction is found
+	if not moveDir then
+		-- Only clear movement if touch input is disabled (to avoid blocking mobile native thumbstick)
+		if not UserInputService.TouchEnabled then
+			humanoid:Move(Vector3.zero, false)
+		end
 		return
 	end
 
-	-- Rotate (right, _, forward) by camera yaw so W is always camera-forward.
-	local yaw = self.camera:getYaw()
-	local local3 = Vector3.new(rightAxis, 0, forwardAxis)
-	local world = CFrame.fromOrientation(0, yaw, 0):VectorToWorldSpace(local3)
-	local moveDir = Vector3.new(world.X, 0, world.Z)
-	if moveDir.Magnitude < 0.01 then
-		humanoid:Move(Vector3.zero, false)
-		return
+	-- Apply custom movement ONLY if keyboard keys were pressed (mobile is applied natively by Roblox thumbstick)
+	if keyboardMovement then
+		humanoid:Move(moveDir, false)
 	end
-	moveDir = moveDir.Unit
 
-	humanoid:Move(moveDir, false)
 	-- Face the direction of motion ONLY when humanoid auto-rotate is off
-	-- (in-match). In the lobby AutoRotate is true and we let the engine handle it.
+	-- (in-match). In the lobby AutoRotate is true and we let the engine handle it natively.
 	if not humanoid.AutoRotate then
 		root.CFrame = CFrame.new(root.Position, root.Position + moveDir)
 	end
