@@ -53,6 +53,47 @@ function UIStyle.gradient(instance, colors, rotation)
 	return g
 end
 
+-- Lock a frame to a fixed aspect ratio. Used so champion cards stay rectangular
+-- when they resize across device classes. The frame's height (or width, per
+-- `dominant`) is derived from the other axis.
+function UIStyle.aspect(instance, ratio, dominant)
+	local a = Instance.new("UIAspectRatioConstraint")
+	a.AspectRatio = ratio or 1
+	a.DominantAxis = dominant or Enum.DominantAxis.Width
+	a.AspectType = Enum.AspectType.FitWithinMaxSize
+	a.Parent = instance
+	return a
+end
+
+-- Clamp a frame's size between min and max pixel sizes regardless of how its
+-- scale-based size resolves. Prevents UI from becoming unreadably small on
+-- phones or comically large on 4K monitors. Pass Vector2 values.
+function UIStyle.sizeBounds(instance, minSize, maxSize)
+	local s = Instance.new("UISizeConstraint")
+	if minSize then
+		s.MinSize = minSize
+	end
+	if maxSize then
+		s.MaxSize = maxSize
+	end
+	s.Parent = instance
+	return s
+end
+
+-- Clamp a TextScaled label's font size so it can't disappear on a small frame
+-- or blow up on a huge one. Min/max are pixel sizes.
+function UIStyle.textBounds(label, minSize, maxSize)
+	local c = Instance.new("UITextSizeConstraint")
+	if minSize then
+		c.MinTextSize = minSize
+	end
+	if maxSize then
+		c.MaxTextSize = maxSize
+	end
+	c.Parent = label
+	return c
+end
+
 function UIStyle.padding(instance, amount)
 	local p = Instance.new("UIPadding")
 	local u = UDim.new(0, amount or 8)
