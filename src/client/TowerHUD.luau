@@ -9,6 +9,8 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
+local Responsive = require(script.Parent:WaitForChild("Responsive"))
+
 local TowerHUD = {}
 TowerHUD.__index = TowerHUD
 
@@ -42,14 +44,22 @@ function TowerHUD:attach(playerGui)
 	screen.Parent = playerGui
 	self.screen = screen
 
+	-- Root UIScale so the strip shrinks on tablet/phone instead of clipping.
+	local rootScale = Instance.new("UIScale")
+	rootScale.Scale = Responsive.scale()
+	rootScale.Parent = screen
+	self.rootScale = rootScale
+
 	-- Outer container split into Blue (left) / Red (right) groups so towers
-	-- align by team regardless of discovery order.
+	-- align by team regardless of discovery order. Pushed down by topInset so
+	-- it never tucks behind the Roblox chat strip.
 	local container = Instance.new("Frame")
 	container.AnchorPoint = Vector2.new(0.5, 0)
-	container.Position = UDim2.new(0.5, 0, 0, 8)
+	container.Position = UDim2.new(0.5, 0, 0, Responsive.topInset())
 	container.Size = UDim2.fromOffset(SLOT_W * 6 + SLOT_PAD * 7, SLOT_H)
 	container.BackgroundTransparency = 1
 	container.Parent = screen
+	self.container = container
 
 	local function makeGroup(alignment)
 		local g = Instance.new("Frame")
@@ -210,6 +220,13 @@ function TowerHUD:_tick()
 end
 
 function TowerHUD:start()
+	-- Live-rescale + topbar-clear on viewport changes.
+	Responsive.start()
+	self._unsubResponsive = Responsive.onChanged(function(_class, scale)
+		self.rootScale.Scale = scale
+		self.container.Position = UDim2.new(0.5, 0, 0, Responsive.topInset())
+	end)
+
 	-- First-time discovery and slot wiring.
 	self:_discover()
 
