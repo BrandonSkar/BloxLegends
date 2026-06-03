@@ -155,7 +155,23 @@ end
 
 local DRAG_THRESHOLD = 10 -- pixels
 
-local function ensureIndicator(self)
+-- Pick which indicator shape best previews an ability:
+--   "line"   — projectile / line_skillshot / dash (rectangle from caster
+--              along the aim direction, sized to the ability's range × width)
+--   "ring"   — ground_aoe / volley (cylinder at the cursor position,
+--              sized to the ability's radius)
+--   nil      — self-buffs, target-cast, etc. (no preview, just the cast)
+local function indicatorShapeFor(ability)
+	local t = ability and ability.Type
+	if t == "projectile" or t == "line_skillshot" or t == "dash" then
+		return "line"
+	elseif t == "ground_aoe" or t == "volley" then
+		return "ring"
+	end
+	return nil
+end
+
+local function ensureRing(self)
 	if self.aimRing and self.aimRing.Parent then
 		return self.aimRing
 	end
@@ -173,6 +189,77 @@ local function ensureIndicator(self)
 	p.Parent = Workspace
 	self.aimRing = p
 	return p
+end
+
+-- A flat box from the caster along the aim direction. Has an outline frame
+-- (semi-transparent neon body) so the player can read range AND width at a
+-- glance — Kate's branch did the same thing in her larger indicator system.
+local function ensureLine(self)
+	if self.aimLine and self.aimLine.Parent then
+		return self.aimLine
+	end
+	local p = Instance.new("Part")
+	p.Name = "AbilityAimLine"
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Material = Enum.Material.Neon
+	p.Color = Color3.fromRGB(255, 220, 100)
+	p.Transparency = 0.55
+	p.Size = Vector3.new(2, 0.2, 30)
+	p.Parent = Workspace
+	self.aimLine = p
+	return p
+end
+
+local function hideAimVisuals(self)
+	if self.aimRing then
+		self.aimRing.Parent = nil
+	end
+	if self.aimLine then
+		self.aimLine.Parent = nil
+	end
+end
+
+-- Snap the line indicator so one short edge sits at the caster and the long
+-- axis points toward `worldAim`. Length is clamped to the ability's range so
+-- the preview matches what the server will actually do on cast.
+local function placeLine(self, ability, originPos, worldAim, groundY)
+	local p = ensureLine(self)
+	p.Color = ability.Color or p.Color
+	local flat = Vector3.new(worldAim.X - originPos.X, 0, worldAim.Z - originPos.Z)
+	if flat.Magnitude < 0.01 then
+		p.Parent = nil
+		return
+	end
+	local dir = flat.Unit
+	local length
+	if ability.Type == "line_skillshot" then
+		length = ability.Length or 30
+	elseif ability.Type == "dash" then
+		length = ability.Distance or 24
+	else
+		length = ability.Range or 30
+	end
+	-- For projectiles, the ability has ProjectileRadius (radius), so width = 2r.
+	local width
+	if ability.Type == "line_skillshot" then
+		width = (ability.Width or 3) * 2
+	elseif ability.Type == "projectile" then
+		width = (ability.ProjectileRadius or 1.0) * 2
+		-- Bare minimum visual thickness so a tiny projectile still reads.
+		if width < 1.4 then
+			width = 1.4
+		end
+	else
+		width = 3
+	end
+	local mid = originPos + dir * (length / 2)
+	mid = Vector3.new(mid.X, groundY + 0.15, mid.Z)
+	p.Size = Vector3.new(width, 0.2, length)
+	p.CFrame = CFrame.lookAt(mid, mid + dir)
+	p.Parent = Workspace
 end
 
 function AbilityCaster:aimStart(slot, screenX, screenY)
@@ -196,16 +283,19 @@ function AbilityCaster:aimStart(slot, screenX, screenY)
 	end
 	self._aimState = {
 		slot = slot,
+		ability = ability,
+		shape = indicatorShapeFor(ability),
+		originPos = root.Position,
 		startX = screenX,
 		startY = screenY,
 		groundY = groundY,
 		lastWorld = screenToGround(screenX, screenY, groundY),
 		dragged = false,
 	}
-	local p = ensureIndicator(self)
-	p.Color = ability.Color or p.Color
-	-- Hidden until the player actually drags — taps don't need a ring flash.
-	p.Parent = nil
+	-- Hide both indicators until the player actually drags — quick taps don't
+	-- need a ring/line flash. The shape is decided here, but only made visible
+	-- inside aimUpdate once we've crossed DRAG_THRESHOLD.
+	hideAimVisuals(self)
 end
 
 function AbilityCaster:aimUpdate(screenX, screenY)
@@ -223,18 +313,26 @@ function AbilityCaster:aimUpdate(screenX, screenY)
 		s.lastWorld = world
 	end
 	if s.dragged and world then
-		local p = ensureIndicator(self)
-		p.CFrame = CFrame.new(world + Vector3.new(0, 0.1, 0)) * CFrame.Angles(0, 0, math.rad(90))
-		p.Parent = Workspace
+		if s.shape == "ring" then
+			local p = ensureRing(self)
+			p.Color = s.ability.Color or p.Color
+			local radius = s.ability.Radius or 6
+			p.Size = Vector3.new(0.2, radius * 2, radius * 2)
+			p.CFrame = CFrame.new(world.X, s.groundY + 0.1, world.Z) * CFrame.Angles(0, 0, math.rad(90))
+			p.Parent = Workspace
+		elseif s.shape == "line" then
+			placeLine(self, s.ability, s.originPos, world, s.groundY)
+		end
+		-- For other ability types (target_cast, self_buff, etc.) we don't show
+		-- an aim indicator — they ignore the aim point and fire on whatever
+		-- target is locked / on the caster.
 	end
 end
 
 function AbilityCaster:aimEnd(screenX, screenY, cancel)
 	local s = self._aimState
 	self._aimState = nil
-	if self.aimRing then
-		self.aimRing.Parent = nil
-	end
+	hideAimVisuals(self)
 	if not s or cancel then
 		return
 	end
