@@ -10,9 +10,6 @@ local CAMERA_HEIGHT = 4
 local MIN_PITCH = math.rad(-60)
 local MAX_PITCH = math.rad(40)
 local MOUSE_SENSITIVITY = 0.0035
--- TouchPan delta is in pixels, not the tiny mouse-delta scale, so it needs a
--- different sensitivity. Tuned so a thumb-flick gives ~90° of yaw.
-local TOUCH_SENSITIVITY = 0.012
 
 function CameraController.new()
 	local self = setmetatable({}, CameraController)
@@ -47,11 +44,10 @@ end
 function CameraController:start()
 	self.camera.CameraType = Enum.CameraType.Scriptable
 
-	-- Right-click is unambiguously a camera-control gesture, so we don't gate
-	-- on `processed`. Previously, HUD ability buttons (TextButtons at the
-	-- bottom of the screen) consumed right-clicks that landed on them and
-	-- the camera silently failed to enter mouse-look mode.
-	table.insert(self.connections, UserInputService.InputBegan:Connect(function(input)
+	table.insert(self.connections, UserInputService.InputBegan:Connect(function(input, processed)
+		if processed then
+			return
+		end
 		if input.UserInputType == Enum.UserInputType.MouseButton2 then
 			self:_setMouseLook(true)
 		end
@@ -71,20 +67,6 @@ function CameraController:start()
 			self.yaw = self.yaw - input.Delta.X * MOUSE_SENSITIVITY
 			self.pitch = math.clamp(self.pitch - input.Delta.Y * MOUSE_SENSITIVITY, MIN_PITCH, MAX_PITCH)
 		end
-	end))
-
-	-- Touch: drag anywhere on the screen (that isn't on a GUI element) to
-	-- rotate the camera. TouchPan reports the gesture's per-frame translation
-	-- in pixels; we apply it directly to yaw/pitch. The `processed` flag is
-	-- set when the gesture started over a GUI element (HUD slot button,
-	-- joystick area, etc.) so the camera never fights the ability drag-aim
-	-- or the default thumbstick.
-	table.insert(self.connections, UserInputService.TouchPan:Connect(function(_positions, delta, _velocity, _state, processed)
-		if processed then
-			return
-		end
-		self.yaw = self.yaw - delta.X * TOUCH_SENSITIVITY
-		self.pitch = math.clamp(self.pitch - delta.Y * TOUCH_SENSITIVITY, MIN_PITCH, MAX_PITCH)
 	end))
 
 	table.insert(self.connections, RunService.RenderStepped:Connect(function()
