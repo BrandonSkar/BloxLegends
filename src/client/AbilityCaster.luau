@@ -292,6 +292,11 @@ function AbilityCaster:aimStart(slot, screenX, screenY)
 		lastWorld = screenToGround(screenX, screenY, groundY),
 		dragged = false,
 	}
+	-- Freeze the camera so a drag on the slot doesn't also pan the camera —
+	-- they'd fight and the aim indicator would jitter. Released in aimEnd.
+	if self.camera and self.camera.setSuspended then
+		self.camera:setSuspended(true)
+	end
 	-- Hide both indicators until the player actually drags — quick taps don't
 	-- need a ring/line flash. The shape is decided here, but only made visible
 	-- inside aimUpdate once we've crossed DRAG_THRESHOLD.
@@ -333,6 +338,9 @@ function AbilityCaster:aimEnd(screenX, screenY, cancel)
 	local s = self._aimState
 	self._aimState = nil
 	hideAimVisuals(self)
+	if self.camera and self.camera.setSuspended then
+		self.camera:setSuspended(false)
+	end
 	if not s or cancel then
 		return
 	end

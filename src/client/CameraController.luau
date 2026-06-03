@@ -10,6 +10,10 @@ local CAMERA_HEIGHT = 4
 local MIN_PITCH = math.rad(-60)
 local MAX_PITCH = math.rad(40)
 local MOUSE_SENSITIVITY = 0.0035
+-- TouchPan delta is pixel-scale rather than mouse-delta scale. Tuned lower
+-- than the previous attempt — a single thumb-flick yields ~45° of yaw, which
+-- is sane for orientation tweaks without overshooting.
+local TOUCH_SENSITIVITY = 0.006
 
 function CameraController.new()
 	local self = setmetatable({}, CameraController)
@@ -18,8 +22,16 @@ function CameraController.new()
 	self.yaw = 0
 	self.pitch = math.rad(-15)
 	self.mouseLook = false
+	self.suspended = false
 	self.connections = {}
 	return self
+end
+
+-- AbilityCaster calls this with `true` while a drag-aim is in flight so the
+-- camera doesn't rotate at the same time the player is steering an ability
+-- indicator. Released back to false on aimEnd.
+function CameraController:setSuspended(suspended)
+	self.suspended = suspended
 end
 
 function CameraController:isMouseLook()
@@ -60,13 +72,32 @@ function CameraController:start()
 	end))
 
 	table.insert(self.connections, UserInputService.InputChanged:Connect(function(input, processed)
-		if processed then
+		if processed or self.suspended then
 			return
 		end
 		if input.UserInputType == Enum.UserInputType.MouseMovement and self.mouseLook then
 			self.yaw = self.yaw - input.Delta.X * MOUSE_SENSITIVITY
 			self.pitch = math.clamp(self.pitch - input.Delta.Y * MOUSE_SENSITIVITY, MIN_PITCH, MAX_PITCH)
 		end
+	end))
+
+	-- Touch: single-finger drag rotates the camera. We skip the gesture if:
+	--   • `processed` is set (Roblox engine is already using the gesture for
+	--     the default joystick / a GUI element with Active=true);
+	--   • `self.suspended` is true (drag-aim on an ability slot is in flight
+	--     and rotating the camera would fight the indicator placement);
+	--   • more than one touch is on the screen (two-finger gestures are
+	--     reserved for zooming/UI; rotating the camera at the same time
+	--     felt chaotic — this is the "crazy" behavior we had earlier).
+	table.insert(self.connections, UserInputService.TouchPan:Connect(function(positions, delta, _velocity, _state, processed)
+		if processed or self.suspended then
+			return
+		end
+		if #positions > 1 then
+			return
+		end
+		self.yaw = self.yaw - delta.X * TOUCH_SENSITIVITY
+		self.pitch = math.clamp(self.pitch - delta.Y * TOUCH_SENSITIVITY, MIN_PITCH, MAX_PITCH)
 	end))
 
 	table.insert(self.connections, RunService.RenderStepped:Connect(function()
