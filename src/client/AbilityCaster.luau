@@ -326,7 +326,13 @@ function AbilityCaster:aimUpdate(screenX, screenY)
 			p.CFrame = CFrame.new(world.X, s.groundY + 0.1, world.Z) * CFrame.Angles(0, 0, math.rad(90))
 			p.Parent = Workspace
 		elseif s.shape == "line" then
-			placeLine(self, s.ability, s.originPos, world, s.groundY)
+			-- Read the live HRP position so the line follows the character as
+			-- they move during the cast. Falls back to the snapshot if the
+			-- character somehow vanished mid-aim.
+			local char = self.player.Character
+			local root = char and char:FindFirstChild("HumanoidRootPart")
+			local origin = (root and root.Position) or s.originPos
+			placeLine(self, s.ability, origin, world, s.groundY)
 		end
 		-- For other ability types (target_cast, self_buff, etc.) we don't show
 		-- an aim indicator — they ignore the aim point and fire on whatever
