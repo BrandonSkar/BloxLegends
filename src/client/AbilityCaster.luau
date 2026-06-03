@@ -7,6 +7,37 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Champions = require(Shared:WaitForChild("Champions"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 
+-- Cached handle to Roblox's PlayerModule controls. Lets us suspend the
+-- default joystick / keyboard input during a drag-aim so the character
+-- doesn't run off in whatever direction the player's finger is dragging.
+-- Lazy-loaded the first time aim suspends so we don't pay a require cost
+-- (or fight the PlayerScripts load order) at module load.
+local cachedControls = nil
+local function getControls()
+	if cachedControls then
+		return cachedControls
+	end
+	local localPlayer = Players.LocalPlayer
+	local playerScripts = localPlayer:FindFirstChild("PlayerScripts")
+	if not playerScripts then
+		return nil
+	end
+	local playerModule = playerScripts:FindFirstChild("PlayerModule")
+	if not playerModule then
+		return nil
+	end
+	local ok, module = pcall(require, playerModule)
+	if not ok or not module then
+		return nil
+	end
+	local ok2, controls = pcall(module.GetControls, module)
+	if not ok2 then
+		return nil
+	end
+	cachedControls = controls
+	return controls
+end
+
 -- Project a screen-space point onto a horizontal ground plane (y=groundY).
 -- Returns nil if the ray points up. Used to translate a finger / mouse
 -- position on the HUD into a world-space target for drag-to-aim.
@@ -297,6 +328,13 @@ function AbilityCaster:aimStart(slot, screenX, screenY)
 	if self.camera and self.camera.setSuspended then
 		self.camera:setSuspended(true)
 	end
+	-- Suspend PlayerModule controls (default joystick + keyboard movement)
+	-- so the touch on the ability slot doesn't double as joystick input —
+	-- without this, dragging from a slot on phone walks the character.
+	local controls = getControls()
+	if controls then
+		controls:Disable()
+	end
 	-- Hide both indicators until the player actually drags — quick taps don't
 	-- need a ring/line flash. The shape is decided here, but only made visible
 	-- inside aimUpdate once we've crossed DRAG_THRESHOLD.
@@ -346,6 +384,10 @@ function AbilityCaster:aimEnd(screenX, screenY, cancel)
 	hideAimVisuals(self)
 	if self.camera and self.camera.setSuspended then
 		self.camera:setSuspended(false)
+	end
+	local controls = getControls()
+	if controls then
+		controls:Enable()
 	end
 	if not s or cancel then
 		return
