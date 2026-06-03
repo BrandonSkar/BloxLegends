@@ -9,6 +9,8 @@ local Config = require(Shared:WaitForChild("Config"))
 local Runes = require(Shared:WaitForChild("Runes"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 
+local Responsive = require(script.Parent:WaitForChild("Responsive"))
+
 local ZONE_PAD_RADIUS = 22 -- show the prompt when within this many studs of a pad center.
 
 local LobbyUI = {}
@@ -78,6 +80,14 @@ function LobbyUI.create(playerGui)
 	screen.IgnoreGuiInset = true
 	screen.Parent = playerGui
 	self.screen = screen
+
+	-- Root UIScale: shrinks the entire lobby UI to fit the actual viewport.
+	-- Reads its initial value from Responsive and stays in sync via the
+	-- listener attached in :start().
+	local rootScale = Instance.new("UIScale")
+	rootScale.Scale = Responsive.scale()
+	rootScale.Parent = screen
+	self.rootScale = rootScale
 
 	-- ---------------- Lobby panel (zones overview) ----------------
 	local lobbyPanel = newFrame(screen, {
@@ -651,6 +661,12 @@ end
 function LobbyUI:start()
 	wireRuneButtons(self)
 	self:_startProximityWatch()
+
+	-- Keep the root scale in sync with viewport size changes.
+	Responsive.start()
+	self._unsubResponsive = Responsive.onChanged(function(_class, scale)
+		self.rootScale.Scale = scale
+	end)
 end
 
 return LobbyUI
