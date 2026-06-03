@@ -6,6 +6,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Champions = require(Shared:WaitForChild("Champions"))
 
 local UIStyle = require(script.Parent:WaitForChild("UIStyle"))
+local Responsive = require(script.Parent:WaitForChild("Responsive"))
 local P = UIStyle.Palette
 
 local ChampionSelectUI = {}
@@ -56,6 +57,13 @@ function ChampionSelectUI.create(playerGui)
 	screen.Parent = playerGui
 	self.screen = screen
 
+	-- Root UIScale — fits the whole champion select on the actual viewport
+	-- instead of clipping past the screen edge on tablets/phones.
+	local rootScale = Instance.new("UIScale")
+	rootScale.Scale = Responsive.scale()
+	rootScale.Parent = screen
+	self.rootScale = rootScale
+
 	-- Dark backdrop
 	local backdrop = Instance.new("Frame")
 	backdrop.Size = UDim2.fromScale(1, 1)
@@ -88,13 +96,17 @@ function ChampionSelectUI.create(playerGui)
 	subtitle.TextScaled = false
 	subtitle.TextSize = 14
 
-	-- Container for the three class columns
+	-- Container for the three class columns. On phone we switch this layout
+	-- to vertical so the three class columns stack instead of clipping past
+	-- the screen edge — the player can scroll if needed. Captured as a self
+	-- field so the Responsive listener can flip the direction at runtime.
 	local columns = Instance.new("Frame")
 	columns.AnchorPoint = Vector2.new(0.5, 0.5)
 	columns.Position = UDim2.fromScale(0.5, 0.55)
-	columns.Size = UDim2.fromOffset(1100, 580)
+	columns.Size = UDim2.fromScale(0.92, 0.78)
 	columns.BackgroundTransparency = 1
 	columns.Parent = screen
+	UIStyle.sizeBounds(columns, Vector2.new(280, 360), Vector2.new(1200, 720))
 	local columnsLayout = Instance.new("UIListLayout")
 	columnsLayout.FillDirection = Enum.FillDirection.Horizontal
 	columnsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
@@ -102,6 +114,8 @@ function ChampionSelectUI.create(playerGui)
 	columnsLayout.Padding = UDim.new(0, 20)
 	columnsLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	columnsLayout.Parent = columns
+	self.columnsFrame = columns
+	self.columnsLayout = columnsLayout
 
 	self.cards = {}
 	-- Per-card extras for the lock overlay (disabled state shown when a
@@ -355,6 +369,21 @@ function ChampionSelectUI.create(playerGui)
 			}
 		end
 	end
+
+	-- Live-reflow on device changes. Scale shrinks the whole UI uniformly;
+	-- on phone we additionally flip the class columns from row to stack so
+	-- the row doesn't run off the side.
+	Responsive.start()
+	self._unsubResponsive = Responsive.onChanged(function(class, scale)
+		self.rootScale.Scale = scale
+		if class == "phone" then
+			self.columnsLayout.FillDirection = Enum.FillDirection.Vertical
+			self.columnsLayout.Padding = UDim.new(0, 8)
+		else
+			self.columnsLayout.FillDirection = Enum.FillDirection.Horizontal
+			self.columnsLayout.Padding = UDim.new(0, 20)
+		end
+	end)
 
 	return self
 end
