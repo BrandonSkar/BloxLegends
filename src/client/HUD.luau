@@ -6,6 +6,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Champions = require(Shared:WaitForChild("Champions"))
 
 local UIStyle = require(script.Parent:WaitForChild("UIStyle"))
+local Responsive = require(script.Parent:WaitForChild("Responsive"))
 local P = UIStyle.Palette
 
 local HUD = {}
@@ -50,6 +51,14 @@ function HUD.create(playerGui)
 	screen.IgnoreGuiInset = true
 	screen.Parent = playerGui
 	self.screen = screen
+
+	-- Root UIScale — every child frame in this ScreenGui is rendered relative
+	-- to this. Responsive.onChanged keeps it in sync with the current viewport
+	-- so a phone shrinks the whole HUD instead of clipping it.
+	local rootScale = Instance.new("UIScale")
+	rootScale.Scale = Responsive.scale()
+	rootScale.Parent = screen
+	self.rootScale = rootScale
 
 	-- ===== HP bar =====
 	local hpHolder = Instance.new("Frame")
@@ -167,6 +176,15 @@ function HUD.create(playerGui)
 
 	RunService.RenderStepped:Connect(function()
 		self:_tick()
+	end)
+
+	-- Keep the root scale in sync with the current viewport. Responsive fires
+	-- immediately on subscribe so we don't need to set the initial value
+	-- twice. The listener stays alive for the HUD's lifetime — the ScreenGui
+	-- is recreated on character respawn, so leaks aren't a concern.
+	Responsive.start()
+	self._unsubResponsive = Responsive.onChanged(function(_class, scale)
+		self.rootScale.Scale = scale
 	end)
 
 	return self
