@@ -10,10 +10,9 @@ local CAMERA_HEIGHT = 4
 local MIN_PITCH = math.rad(-60)
 local MAX_PITCH = math.rad(40)
 local MOUSE_SENSITIVITY = 0.0035
--- TouchPan delta is pixel-scale rather than mouse-delta scale. Tuned lower
--- than the previous attempt — a single thumb-flick yields ~45° of yaw, which
--- is sane for orientation tweaks without overshooting.
-local TOUCH_SENSITIVITY = 0.006
+-- Calibrated for touchscreen — value from the targeting-upgrades branch
+-- where this camera feel was tuned and tested.
+local TOUCH_SENSITIVITY = 0.0055
 
 function CameraController.new()
 	local self = setmetatable({}, CameraController)
@@ -23,6 +22,8 @@ function CameraController.new()
 	self.pitch = math.rad(-15)
 	self.mouseLook = false
 	self.suspended = false
+	self.activeTouch = nil
+	self.lastTouchPos = nil
 	self.connections = {}
 	return self
 end
@@ -81,23 +82,44 @@ function CameraController:start()
 		end
 	end))
 
-	-- Touch: single-finger drag rotates the camera. We skip the gesture if:
-	--   • `processed` is set (Roblox engine is already using the gesture for
-	--     the default joystick / a GUI element with Active=true);
-	--   • `self.suspended` is true (drag-aim on an ability slot is in flight
-	--     and rotating the camera would fight the indicator placement);
-	--   • more than one touch is on the screen (two-finger gestures are
-	--     reserved for zooming/UI; rotating the camera at the same time
-	--     felt chaotic — this is the "crazy" behavior we had earlier).
-	table.insert(self.connections, UserInputService.TouchPan:Connect(function(positions, delta, _velocity, _state, processed)
+	-- Tablet / mobile touch-look. Tracks a single specific touch (the first
+	-- finger that touches outside the joystick zone) and rotates the camera
+	-- by that finger's per-frame translation. This is the same approach the
+	-- targeting-upgrades branch shipped — feels right because we ignore
+	-- subsequent touches and only act on a deliberate single-finger drag.
+	table.insert(self.connections, UserInputService.TouchStarted:Connect(function(input, processed)
 		if processed or self.suspended then
 			return
 		end
-		if #positions > 1 then
+		-- Bottom-left quadrant is reserved for the dynamic joystick — touches
+		-- starting there move the character, not the camera.
+		local viewport = workspace.CurrentCamera.ViewportSize
+		if input.Position.X < viewport.X * 0.45 and input.Position.Y > viewport.Y * 0.45 then
 			return
 		end
-		self.yaw = self.yaw - delta.X * TOUCH_SENSITIVITY
-		self.pitch = math.clamp(self.pitch - delta.Y * TOUCH_SENSITIVITY, MIN_PITCH, MAX_PITCH)
+		if not self.activeTouch then
+			self.activeTouch = input
+			self.lastTouchPos = input.Position
+		end
+	end))
+
+	table.insert(self.connections, UserInputService.TouchMoved:Connect(function(input)
+		if input == self.activeTouch and not self.suspended then
+			local currentPos = input.Position
+			if self.lastTouchPos then
+				local delta = currentPos - self.lastTouchPos
+				self.yaw = self.yaw - delta.X * TOUCH_SENSITIVITY
+				self.pitch = math.clamp(self.pitch - delta.Y * TOUCH_SENSITIVITY, MIN_PITCH, MAX_PITCH)
+			end
+			self.lastTouchPos = currentPos
+		end
+	end))
+
+	table.insert(self.connections, UserInputService.TouchEnded:Connect(function(input)
+		if input == self.activeTouch then
+			self.activeTouch = nil
+			self.lastTouchPos = nil
+		end
 	end))
 
 	table.insert(self.connections, RunService.RenderStepped:Connect(function()
