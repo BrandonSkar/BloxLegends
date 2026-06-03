@@ -40,6 +40,19 @@ caster:setTargetingController(targeting)
 
 local hud = HUD.create(playerGui)
 hud:setVisible(false)
+-- HUD ability slots support drag-aim: press to start, drag to move the
+-- ground-ring indicator, release to fire at that spot. A quick tap
+-- (no meaningful drag) falls through to camera-forward aim so simple
+-- taps still cast in the direction the player is facing.
+hud:setOnAimStart(function(slot, x, y)
+	caster:aimStart(slot, x, y)
+end)
+hud:setOnAimUpdate(function(x, y)
+	caster:aimUpdate(x, y)
+end)
+hud:setOnAimEnd(function(x, y, cancel)
+	caster:aimEnd(x, y, cancel)
+end)
 
 local lobbyUI = LobbyUI.create(playerGui)
 lobbyUI:start()

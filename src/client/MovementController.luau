@@ -70,8 +70,25 @@ function MovementController:_tick()
 		rightAxis = rightAxis - 1
 	end
 
+	-- On touch devices, don't fight the Roblox default thumbstick. If no WASD
+	-- key is being held, leave humanoid:Move alone so the engine's joystick
+	-- input drives motion. The default thumbstick already calls humanoid:Move
+	-- with relativeToCamera=true, so movement IS camera-relative through our
+	-- scriptable camera. But we still need to manually rotate the character
+	-- in-match (where AutoRotate is forced off) — the WASD path below does
+	-- that explicitly; on touch we read the engine's MoveDirection instead.
 	if forwardAxis == 0 and rightAxis == 0 then
-		humanoid:Move(Vector3.zero, false)
+		if UserInputService.TouchEnabled then
+			if not humanoid.AutoRotate then
+				local md = humanoid.MoveDirection
+				local flat = Vector3.new(md.X, 0, md.Z)
+				if flat.Magnitude > 0.01 then
+					root.CFrame = CFrame.new(root.Position, root.Position + flat.Unit)
+				end
+			end
+		else
+			humanoid:Move(Vector3.zero, false)
+		end
 		return
 	end
 
@@ -81,7 +98,9 @@ function MovementController:_tick()
 	local world = CFrame.fromOrientation(0, yaw, 0):VectorToWorldSpace(local3)
 	local moveDir = Vector3.new(world.X, 0, world.Z)
 	if moveDir.Magnitude < 0.01 then
-		humanoid:Move(Vector3.zero, false)
+		if not UserInputService.TouchEnabled then
+			humanoid:Move(Vector3.zero, false)
+		end
 		return
 	end
 	moveDir = moveDir.Unit

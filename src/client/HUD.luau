@@ -1,5 +1,6 @@
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -216,12 +217,65 @@ function HUD:setChampion(championKey)
 	for i, slot in ipairs(Champions.SlotOrder) do
 		local ability = champ.Abilities[slot]
 		if ability then
-			local frame = Instance.new("Frame")
+			-- TextButton (not Frame) so tap/click fires the cast on touch and
+			-- mouse alike. AutoButtonColor false: visual feedback comes from
+			-- the cooldown overlay and the slot's gradient, not Roblox's flat
+			-- darken-on-press default.
+			local frame = Instance.new("TextButton")
 			frame.LayoutOrder = i
 			frame.Size = UDim2.fromOffset(slotSize, slotSize)
 			frame.BackgroundColor3 = ability.Color or Color3.fromRGB(80, 80, 80)
 			frame.BorderSizePixel = 0
+			frame.Text = ""
+			frame.AutoButtonColor = false
 			frame.Parent = self.bar
+			-- Drag-aim: press → drag → release. The press fires onAimStart, the
+			-- subsequent drag (anywhere on the screen) fires onAimUpdate, and
+			-- the release fires onAimEnd. We track the originating InputObject
+			-- across the whole window via UserInputService because GuiButton
+			-- input events only fire while the cursor is over the button —
+			-- once the player drags off the slot we'd lose all updates.
+			frame.InputBegan:Connect(function(input)
+				if input.UserInputType ~= Enum.UserInputType.MouseButton1
+					and input.UserInputType ~= Enum.UserInputType.Touch
+				then
+					return
+				end
+				local screenX = input.Position.X
+				local screenY = input.Position.Y
+				if self._onAimStart then
+					self._onAimStart(slot, screenX, screenY)
+				end
+				local moveConn, endConn
+				moveConn = UserInputService.InputChanged:Connect(function(moveInput)
+					-- Touch fires on the same InputObject; mouse uses MouseMovement.
+					if moveInput == input
+						or moveInput.UserInputType == Enum.UserInputType.MouseMovement
+					then
+						if self._onAimUpdate then
+							self._onAimUpdate(moveInput.Position.X, moveInput.Position.Y)
+						end
+					end
+				end)
+				endConn = UserInputService.InputEnded:Connect(function(endInput)
+					local matches = endInput == input
+						or (input.UserInputType == Enum.UserInputType.MouseButton1
+							and endInput.UserInputType == Enum.UserInputType.MouseButton1)
+					if matches then
+						if moveConn then
+							moveConn:Disconnect()
+							moveConn = nil
+						end
+						if endConn then
+							endConn:Disconnect()
+							endConn = nil
+						end
+						if self._onAimEnd then
+							self._onAimEnd(endInput.Position.X, endInput.Position.Y, false)
+						end
+					end
+				end)
+			end)
 			UIStyle.corner(frame, 12)
 			UIStyle.stroke(frame, { Color = Color3.fromRGB(0, 0, 0), Thickness = 2, Transparency = 0.4 })
 			UIStyle.gradient(frame, {
@@ -273,6 +327,26 @@ function HUD:setChampion(championKey)
 			self.slotFrames[slot] = { overlay = overlay, text = cdText, duration = 0, frame = frame }
 		end
 	end
+end
+
+-- Wire the slot button taps. Called once from init.client.luau so the HUD
+-- doesn't need to know about AbilityCaster directly. The HUD reports three
+-- phases — start (initial press), update (drag), end (release) — so the
+-- caster can render an aim indicator and fire at the final position.
+function HUD:setOnAbilityPressed(fn)
+	self._onAbilityPressed = fn
+end
+
+function HUD:setOnAimStart(fn)
+	self._onAimStart = fn
+end
+
+function HUD:setOnAimUpdate(fn)
+	self._onAimUpdate = fn
+end
+
+function HUD:setOnAimEnd(fn)
+	self._onAimEnd = fn
 end
 
 function HUD:setHP(hp, maxHP)
