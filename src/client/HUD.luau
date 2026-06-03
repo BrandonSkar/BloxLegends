@@ -217,17 +217,18 @@ function HUD:setChampion(championKey)
 	for i, slot in ipairs(Champions.SlotOrder) do
 		local ability = champ.Abilities[slot]
 		if ability then
-			-- TextButton (not Frame) so tap/click fires the cast on touch and
-			-- mouse alike. AutoButtonColor false: visual feedback comes from
-			-- the cooldown overlay and the slot's gradient, not Roblox's flat
-			-- darken-on-press default.
-			local frame = Instance.new("TextButton")
+			-- Frame (not TextButton). TextButton sinks ALL mouse input over it,
+			-- including right-click — which would silently break the camera
+			-- mouse-look gesture since CameraController gates MB2 on the
+			-- `processed` flag. Frame with Active=false still emits InputBegan
+			-- for the drag-aim flow but lets non-MB1 input pass through to
+			-- UserInputService.
+			local frame = Instance.new("Frame")
 			frame.LayoutOrder = i
 			frame.Size = UDim2.fromOffset(slotSize, slotSize)
 			frame.BackgroundColor3 = ability.Color or Color3.fromRGB(80, 80, 80)
 			frame.BorderSizePixel = 0
-			frame.Text = ""
-			frame.AutoButtonColor = false
+			frame.Active = false
 			frame.Parent = self.bar
 			-- Drag-aim: press → drag → release. The press fires onAimStart, the
 			-- subsequent drag (anywhere on the screen) fires onAimUpdate, and
