@@ -175,21 +175,27 @@ local function applyStatusOnHit(self, targetPlayer, status, casterPos, attackerP
 	end
 end
 
--- Mirror of applyStatusOnHit for minion targets. Displacement CC only affects
--- dummies (see MinionService helpers); DoT ticks on any minion so Ignite-style
--- damage-over-time abilities are visible in practice. Other CC (stun/slow/
--- root) is intentionally skipped — the dummy doesn't move on its own.
+-- Mirror of applyStatusOnHit for minion targets. Displacement CC affects the
+-- practice dummy + pit bots (no-op on lane/jungle minions so their pathing is
+-- undisturbed); stun/slow/root land on pit bots only, so every kind of crowd
+-- control can be practiced on something that moves. DoT ticks on any minion.
 local function applyStatusToMinion(self, entry, status, casterPos, attackerPlayer)
 	if not status or not entry then
 		return
 	end
 	local t = status.type
 	if t == "knockup" then
-		self.minionService:applyDummyKnockup(entry, status.height, status.duration)
+		self.minionService:applyKnockupToMinion(entry, status.height, status.duration)
 	elseif t == "knockback" and casterPos then
-		self.minionService:applyDummyKnockback(entry, casterPos, status.distance)
+		self.minionService:applyKnockbackToMinion(entry, casterPos, status.distance)
 	elseif t == "pull" and casterPos then
-		self.minionService:applyDummyPull(entry, casterPos, status.distance)
+		self.minionService:applyPullToMinion(entry, casterPos, status.distance)
+	elseif t == "stun" then
+		self.minionService:applyStunToMinion(entry, status.duration)
+	elseif t == "slow" then
+		self.minionService:applySlowToMinion(entry, status.magnitude, status.duration)
+	elseif t == "root" then
+		self.minionService:applyRootToMinion(entry, status.duration)
 	elseif t == "dot" then
 		self.minionService:applyDoTToMinion(entry, status.damagePerTick, status.interval, status.ticks, attackerPlayer)
 	end
@@ -716,17 +722,18 @@ local function dash(self, player, ability, direction)
 					end
 				end
 			end
-			-- Practice dummies in the sweep (regular minions are not displaced).
+			-- Practice dummies + pit bots in the sweep (lane/jungle minions are
+			-- not displaced).
 			for _, mEntry in pairs(self.minionService:allMinions()) do
 				local key = "m" .. tostring(mEntry.id)
-				if mEntry.alive and mEntry.isDummy and not pushedSet[key] then
+				if mEntry.alive and (mEntry.isDummy or mEntry.isPitBot) and not pushedSet[key] then
 					if flatDist(mEntry.root.Position, hrp.Position) <= 4 then
 						pushedSet[key] = true
 						if ability.KnockbackDamage then
 							self.minionService:applyDamage(mEntry, ability.KnockbackDamage, player)
 						end
 						if ability.KnockbackOnHit > 0 then
-							self.minionService:applyDummyKnockback(mEntry, hrp.Position, ability.KnockbackOnHit)
+							self.minionService:applyKnockbackToMinion(mEntry, hrp.Position, ability.KnockbackOnHit)
 						end
 					end
 				end

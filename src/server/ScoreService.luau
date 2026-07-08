@@ -104,13 +104,22 @@ function ScoreService:_entryFor(player)
 end
 
 function ScoreService:setChampion(player, championKey)
+	local e = self.combatService:getEntry(player)
+	if e and e.practiceMode then
+		return
+	end
 	self:_entryFor(player).champion = championKey
 	self:_markStatsDirty()
 end
 
 -- Called by MatchController on every positive gold award so the scoreboard's
--- "gold earned" column stays truthful.
+-- "gold earned" column stays truthful. Pit players never enter match stats —
+-- their bookkeeping lives on PracticeService's rankings board.
 function ScoreService:onGoldEarned(player, amount)
+	local e = self.combatService:getEntry(player)
+	if e and e.practiceMode then
+		return
+	end
 	self:_entryFor(player).gold = self:_entryFor(player).gold + amount
 	self:_markStatsDirty()
 end

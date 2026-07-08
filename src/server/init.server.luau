@@ -108,8 +108,9 @@ matchController.scoreService = scoreService
 -- Jungle: neutral buff camps + the Overlord boss (arena servers only).
 local jungleService = JungleService.new(minionService, combatService, matchController, scoreService)
 minionService:setJungleService(jungleService)
-local practiceService = PracticeService.new(minionService)
+local practiceService = PracticeService.new(minionService, combatService, matchController)
 minionService:setPracticeService(practiceService)
+combatService:setPracticeService(practiceService)
 local abilityHandler = AbilityHandler.new(combatService, minionService, matchController)
 abilityHandler:setTowerService(towerService)
 abilityHandler.playerData = playerData
@@ -134,6 +135,10 @@ recallService:start()
 if RUN_COMBAT then
 	towerService:start()
 	jungleService:start()
+end
+-- Pit bot AI only where the Pit exists (Studio + production lobby servers).
+if RUN_LOBBY then
+	practiceService:start()
 end
 
 -- =====================================================================
@@ -344,13 +349,18 @@ local function spawnInMatch(player, team)
 	broadcastTeamPicksTo(player)
 end
 
--- Practice mode: bypass matchmaking and put the player in the practice room
--- with a respawning target dummy. Treated as "in_match" state so the in-match
--- HUD shows; the player picks a champion via the normal Champion Select UI.
+-- The Pit: bypass matchmaking and drop the player into the shared free-for-all
+-- warm-up arena (sparring bots + a target dummy + any other waiting players).
+-- Treated as "in_match" state so the in-match HUD shows; the player picks a
+-- champion via the normal Champion Select UI. Each Pit player gets a UNIQUE
+-- one-man team ("FFA<userId>") — that single fact is what turns every existing
+-- "enemy = different team" check (targeting, abilities, kill credit) into
+-- free-for-all PvP without special cases.
+local PIT_TAG_COLOR = Color3.fromRGB(255, 140, 70)
+
 local function spawnInPractice(player)
-	-- Put them on Blue so existing team-of checks (auto-attack, abilities) see
-	-- the dummy (team Red) as enemy.
-	matchController.teams[player.UserId] = "Blue"
+	local ffaTeam = "FFA" .. player.UserId
+	matchController.teams[player.UserId] = ffaTeam
 	matchController.gold[player.UserId] = matchController.gold[player.UserId] or 0
 	matchmaking:_setPlayerState(player, "in_match", nil)
 
@@ -372,12 +382,12 @@ local function spawnInPractice(player)
 	end
 	shopService:resetPlayer(player)
 	recallService:clearInBaseState(player)
-	-- A pile of practice gold so builds can be tested against the dummy.
-	matchController:addGold(player, 10000)
+	-- Practice gold so builds can be tested; kills top it up from there.
+	matchController:addGold(player, Config.Pit.StartingGold)
 
-	local spawnPos = PracticeBuilder.getSpawnPos()
 	local function spawnBody()
-		local char, humanoid = spawnAt(player, spawnPos, Vector3.new(1, 0, 0))
+		-- Scattered spawn plates so respawns don't stack players on one spot.
+		local char, humanoid = spawnAt(player, PracticeBuilder.getSpawnPos(), Vector3.new(1, 0, 0))
 		humanoid.WalkSpeed = 0
 		humanoid.JumpPower = 0
 		humanoid.UseJumpPower = true
@@ -385,13 +395,51 @@ local function spawnInPractice(player)
 		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 
 		char:SetAttribute("PlayerId", player.UserId)
-		char:SetAttribute("Team", "Blue")
+		char:SetAttribute("Team", ffaTeam)
 		for _, part in ipairs(char:GetDescendants()) do
 			if part:IsA("BasePart") then
 				part:SetAttribute("PlayerId", player.UserId)
-				part:SetAttribute("Team", "Blue")
+				part:SetAttribute("Team", ffaTeam)
 			end
 		end
+
+		-- Ember FFA nameplate so Pit brawlers can read each other's level/name.
+		local head = char:FindFirstChild("Head")
+		if head then
+			local old = head:FindFirstChild("TeamTag")
+			if old then
+				old:Destroy()
+			end
+			local gui = Instance.new("BillboardGui")
+			gui.Name = "TeamTag"
+			gui.Size = UDim2.fromOffset(90, 16)
+			gui.StudsOffset = Vector3.new(0, 2.2, 0)
+			gui.AlwaysOnTop = true
+			gui.Parent = head
+			local label = Instance.new("TextLabel")
+			label.Size = UDim2.fromScale(1, 1)
+			label.BackgroundColor3 = Color3.fromRGB(40, 30, 25)
+			label.BackgroundTransparency = 0.3
+			label.BorderSizePixel = 0
+			local curEntry = combatService:getEntry(player)
+			label.Text = ("[%d] %s"):format((curEntry and curEntry.level) or 1, player.DisplayName)
+			label.Font = Enum.Font.GothamBold
+			label.TextScaled = true
+			label.TextColor3 = Color3.fromRGB(255, 255, 255)
+			label.TextStrokeTransparency = 0.3
+			label.Parent = gui
+			local nameCorner = Instance.new("UICorner")
+			nameCorner.CornerRadius = UDim.new(0, 3)
+			nameCorner.Parent = label
+			local nameStroke = Instance.new("UIStroke")
+			nameStroke.Color = PIT_TAG_COLOR
+			nameStroke.Thickness = 2
+			nameStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+			nameStroke.Parent = label
+		end
+
+		-- Brief spawn protection so a fresh body can't be farmed on its plate.
+		combatService:applyDamageReduction(player, 0, Config.Pit.SpawnProtection)
 
 		humanoid.Died:Connect(function()
 			local eAtDeath = combatService:getEntry(player)
@@ -410,9 +458,10 @@ local function spawnInPractice(player)
 	end
 
 	spawnBody()
-	practiceService:ensureDummy()
+	practiceService:onPlayerEnteredPit(player)
 	combatService:replicateHP(player)
 	matchController:sendStateTo(player)
+	Remotes.get("PracticeStarted"):FireClient(player)
 	Remotes.get("ChampionSelectStart"):FireClient(player, Champions.RosterOrder)
 	broadcastTeamPicksTo(player)
 end
@@ -440,7 +489,8 @@ local championPicks = { Blue = {}, Red = {} }
 -- Returns { [championKey] = pickerDisplayName }.
 local function picksVisibleTo(player)
 	local team = matchController:teamOf(player)
-	if not team then
+	-- Pit players carry FFA teams with no pick table — everything's available.
+	if not team or not championPicks[team] then
 		return {}
 	end
 	local out = {}
@@ -467,7 +517,7 @@ end
 
 local function clearPickForPlayer(player)
 	local team = matchController:teamOf(player)
-	if not team then
+	if not team or not championPicks[team] then
 		return
 	end
 	local removed = false
@@ -794,6 +844,7 @@ Remotes.get("LeaveMatch").OnServerEvent:Connect(function(player)
 	end
 	matchmaking:leaveMatch(player)
 	clearPickForPlayer(player)
+	practiceService:onPlayerLeftPit(player) -- no-op unless they were in the Pit
 	combatService:unregister(player)
 	matchController:removePlayer(player)
 	spawnInLobby(player)
@@ -925,6 +976,7 @@ Players.PlayerRemoving:Connect(function(player)
 	-- Free up this player's champion pick BEFORE removing their team mapping,
 	-- so teammates see the slot reopen.
 	clearPickForPlayer(player)
+	practiceService:onPlayerLeftPit(player)
 	matchmaking:onPlayerLeft(player)
 	playerData:unregister(player)
 	combatService:unregister(player)

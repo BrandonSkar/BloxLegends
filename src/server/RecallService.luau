@@ -171,8 +171,9 @@ function RecallService:_tick()
 		local basePos = getBasePos(self, player)
 		local inBase = false
 		if entry.practiceMode then
-			-- Practice room counts as "in base" everywhere: free shopping to
-			-- test builds, and constant regen between drills.
+			-- The Pit counts as "in base" everywhere so builds can be bought and
+			-- tested on the spot. Regen is gated separately below — healing
+			-- 20%/s mid-duel would make Pit PvP unkillable.
 			inBase = true
 		elseif root and basePos then
 			local d = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(basePos.X, 0, basePos.Z)).Magnitude
@@ -182,7 +183,12 @@ function RecallService:_tick()
 			self.inBaseState[player.UserId] = inBase
 			Remotes.get("InBaseChanged"):FireClient(player, inBase)
 		end
-		if inBase and entry.hp < entry.maxHP then
+		local canRegen = inBase
+		if entry.practiceMode then
+			-- Out-of-combat only: no damage taken for the last few seconds.
+			canRegen = (now - (entry.lastDamagedAt or 0)) >= 5
+		end
+		if canRegen and entry.hp < entry.maxHP then
 			-- Tick-based: heal RegenPctPerSecond * maxHP * tickInterval each tick.
 			entry.nextBaseRegenAt = entry.nextBaseRegenAt or (now + Config.Recall.RegenTickInterval)
 			if now >= entry.nextBaseRegenAt then

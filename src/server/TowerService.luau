@@ -507,7 +507,7 @@ local function nearestEnemyMinion(self, tower)
 	local best, bestDist
 	local towerPos = tower.root.Position
 	for _, m in pairs(self.minionService:allMinions()) do
-		if m.alive and m.team ~= tower.team and not m.isJungle and not m.isDummy then
+		if m.alive and m.team ~= tower.team and not m.isJungle and not m.isDummy and not m.isPitBot then
 			local d = (m.root.Position - towerPos).Magnitude
 			if d <= tower.range then
 				if not bestDist or d < bestDist then

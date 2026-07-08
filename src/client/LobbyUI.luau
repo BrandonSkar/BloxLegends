@@ -1,3 +1,8 @@
+-- LobbyUI — every 2D panel shown while in the lobby: the queue-zone list, the
+-- in-zone waiting card, the pad access prompt, the lobby timer, the action
+-- buttons (Start Now / Enter The Pit), the Pit portal prompt, and the rune
+-- shop. Styled through UIStyle so it matches the in-match HUD.
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -9,19 +14,34 @@ local Config = require(Shared:WaitForChild("Config"))
 local Runes = require(Shared:WaitForChild("Runes"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 
+local UIStyle = require(script.Parent:WaitForChild("UIStyle"))
 local Responsive = require(script.Parent:WaitForChild("Responsive"))
+local P = UIStyle.Palette
 
-local ZONE_PAD_RADIUS = 22 -- show the prompt when within this many studs of a pad center.
+local ZONE_PAD_RADIUS = 22 -- show the zone prompt within this many studs of a pad center
+local PIT_PORTAL_RADIUS = 18 -- show the Pit prompt within this many studs of the portal
+
+local EMBER = Color3.fromRGB(255, 120, 60)
+
+-- Mirrors LobbyBuilder's pad colors so the zone list rows match the world.
+local ZONE_ROW_COLORS = {
+	Color3.fromRGB(80, 140, 220),
+	Color3.fromRGB(220, 100, 100),
+	Color3.fromRGB(120, 200, 110),
+	Color3.fromRGB(220, 200, 90),
+	Color3.fromRGB(180, 120, 220),
+	Color3.fromRGB(220, 150, 90),
+}
 
 local LobbyUI = {}
 LobbyUI.__index = LobbyUI
 
-local FONT = Enum.Font.GothamBold
+local FONT = UIStyle.Font
 
 local function newFrame(parent, props)
 	local f = Instance.new("Frame")
 	f.BorderSizePixel = 0
-	f.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+	f.BackgroundColor3 = P.panel
 	for k, v in pairs(props) do
 		f[k] = v
 	end
@@ -33,7 +53,7 @@ local function newLabel(parent, text, color, props)
 	local l = Instance.new("TextLabel")
 	l.BackgroundTransparency = 1
 	l.Text = text
-	l.TextColor3 = color or Color3.fromRGB(240, 240, 240)
+	l.TextColor3 = color or P.text
 	l.Font = FONT
 	l.TextScaled = true
 	l.TextStrokeTransparency = 0.5
@@ -48,20 +68,42 @@ end
 
 local function newButton(parent, text, color, props)
 	local b = Instance.new("TextButton")
-	b.BackgroundColor3 = color or Color3.fromRGB(70, 70, 80)
+	b.BackgroundColor3 = color or P.panelLight
 	b.BorderSizePixel = 0
 	b.Text = text
-	b.TextColor3 = Color3.fromRGB(240, 240, 240)
+	b.TextColor3 = P.text
 	b.Font = FONT
 	b.TextScaled = true
-	b.AutoButtonColor = true
 	if props then
 		for k, v in pairs(props) do
 			b[k] = v
 		end
 	end
 	b.Parent = parent
+	UIStyle.corner(b, 10)
+	UIStyle.textBounds(b, 10, 22)
+	UIStyle.makeButtonInteractive(b, b.BackgroundColor3)
 	return b
+end
+
+-- Dresses a container as a standard lobby card: dark rounded panel + stroke.
+local function styleCard(frame)
+	frame.BackgroundColor3 = P.bg
+	frame.BackgroundTransparency = 0.06
+	UIStyle.corner(frame, 14)
+	UIStyle.stroke(frame, { Color = P.panelLight, Thickness = 1.5, Transparency = 0.25 })
+end
+
+-- A slim accent bar under a card's title.
+local function accentBar(parent, color, y, width)
+	local bar = newFrame(parent, {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, y),
+		Size = UDim2.fromOffset(width or 60, 3),
+		BackgroundColor3 = color,
+	})
+	UIStyle.corner(bar, 2)
+	return bar
 end
 
 function LobbyUI.create(playerGui)
@@ -73,6 +115,7 @@ function LobbyUI.create(playerGui)
 	self.gold = 0
 	self.runes = {}
 	self.summonerSpell = Runes.DefaultSummonerSpell
+	self.pitMode = false -- true while we're in The Pit (relabels the leave button)
 
 	local screen = Instance.new("ScreenGui")
 	screen.Name = "BloxLegendsLobby"
@@ -82,8 +125,6 @@ function LobbyUI.create(playerGui)
 	self.screen = screen
 
 	-- Root UIScale: shrinks the entire lobby UI to fit the actual viewport.
-	-- Reads its initial value from Responsive and stays in sync via the
-	-- listener attached in :start().
 	local rootScale = Instance.new("UIScale")
 	rootScale.Scale = Responsive.scale()
 	rootScale.Parent = screen
@@ -94,17 +135,22 @@ function LobbyUI.create(playerGui)
 		Name = "LobbyPanel",
 		AnchorPoint = Vector2.new(0, 0.5),
 		Position = UDim2.new(0, 16, 0.5, 0),
-		Size = UDim2.fromOffset(280, 480),
-		BackgroundTransparency = 0.15,
+		Size = UDim2.fromOffset(280, 470),
 	})
-	newLabel(lobbyPanel, "QUEUE ZONES", Color3.fromRGB(240, 220, 120), {
-		Size = UDim2.new(1, 0, 0, 36),
-		Position = UDim2.new(0, 0, 0, 4),
+	styleCard(lobbyPanel)
+	newLabel(lobbyPanel, "QUEUE ZONES", P.accent, {
+		Size = UDim2.new(1, 0, 0, 32),
+		Position = UDim2.fromOffset(0, 8),
+	})
+	accentBar(lobbyPanel, P.accent, 42)
+	newLabel(lobbyPanel, "Stand on a pad to host or join", P.textDim, {
+		Size = UDim2.new(1, -16, 0, 18),
+		Position = UDim2.fromOffset(8, 50),
 	})
 	local zoneList = newFrame(lobbyPanel, {
 		Name = "ZoneList",
-		Size = UDim2.new(1, -16, 1, -50),
-		Position = UDim2.new(0, 8, 0, 44),
+		Size = UDim2.new(1, -16, 1, -84),
+		Position = UDim2.fromOffset(8, 76),
 		BackgroundTransparency = 1,
 	})
 	local zoneLayout = Instance.new("UIListLayout")
@@ -121,31 +167,34 @@ function LobbyUI.create(playerGui)
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(420, 360),
-		BackgroundTransparency = 0.1,
 		Visible = false,
 	})
+	styleCard(zonePanel)
 	self.zonePanel = zonePanel
-	self.zoneTitleLabel = newLabel(zonePanel, "Zone ?", Color3.fromRGB(240, 240, 240), {
+	self.zoneTitleLabel = newLabel(zonePanel, "Zone ?", P.text, {
 		Size = UDim2.new(1, 0, 0, 36),
-		Position = UDim2.new(0, 0, 0, 6),
+		Position = UDim2.fromOffset(0, 10),
 	})
-	self.zonePlayersLabel = newLabel(zonePanel, "0 / 3", Color3.fromRGB(200, 200, 200), {
-		Size = UDim2.new(1, 0, 0, 28),
-		Position = UDim2.new(0, 0, 0, 44),
+	accentBar(zonePanel, P.accent, 48)
+	self.zonePlayersLabel = newLabel(zonePanel, "0 / 3", P.textDim, {
+		Size = UDim2.new(1, 0, 0, 26),
+		Position = UDim2.fromOffset(0, 58),
 	})
-	self.zoneMembersLabel = newLabel(zonePanel, "", Color3.fromRGB(220, 220, 220), {
-		Size = UDim2.new(1, -16, 0, 120),
-		Position = UDim2.new(0, 8, 0, 76),
+	self.zoneMembersLabel = newLabel(zonePanel, "", P.text, {
+		Size = UDim2.new(1, -32, 0, 120),
+		Position = UDim2.fromOffset(16, 92),
 	})
 	self.zoneMembersLabel.TextWrapped = true
 	self.zoneMembersLabel.TextYAlignment = Enum.TextYAlignment.Top
-	self.zoneAccessLabel = newLabel(zonePanel, "Access: Open", Color3.fromRGB(200, 200, 200), {
-		Size = UDim2.new(1, 0, 0, 24),
-		Position = UDim2.new(0, 0, 1, -120),
+	self.zoneMembersLabel.TextScaled = false
+	self.zoneMembersLabel.TextSize = 18
+	self.zoneAccessLabel = newLabel(zonePanel, "Access: Open", P.textDim, {
+		Size = UDim2.new(1, 0, 0, 22),
+		Position = UDim2.new(0, 0, 1, -116),
 	})
 	local leaveBtn = newButton(zonePanel, "Leave Zone", Color3.fromRGB(160, 70, 70), {
-		Size = UDim2.new(1, -32, 0, 38),
-		Position = UDim2.new(0, 16, 1, -48),
+		Size = UDim2.new(1, -32, 0, 40),
+		Position = UDim2.new(0, 16, 1, -52),
 	})
 	self.leaveZoneBtn = leaveBtn
 
@@ -153,25 +202,25 @@ function LobbyUI.create(playerGui)
 	local accessPrompt = newFrame(screen, {
 		Name = "AccessPrompt",
 		AnchorPoint = Vector2.new(0.5, 1),
-		Position = UDim2.new(0.5, 0, 1, -120),
-		Size = UDim2.fromOffset(440, 190),
-		BackgroundTransparency = 0.1,
+		Position = UDim2.new(0.5, 0, 1, -110),
+		Size = UDim2.fromOffset(440, 180),
 		Visible = false,
 	})
+	styleCard(accessPrompt)
 	self.accessPrompt = accessPrompt
-	self.accessPromptTitle = newLabel(accessPrompt, "Zone ?", Color3.fromRGB(240, 220, 120), {
-		Size = UDim2.new(1, 0, 0, 32),
-		Position = UDim2.new(0, 0, 0, 6),
+	self.accessPromptTitle = newLabel(accessPrompt, "Zone ?", P.accent, {
+		Size = UDim2.new(1, 0, 0, 30),
+		Position = UDim2.fromOffset(0, 10),
 	})
-	self.accessPromptSubtitle = newLabel(accessPrompt, "Choose access:", Color3.fromRGB(220, 220, 220), {
-		Size = UDim2.new(1, 0, 0, 22),
-		Position = UDim2.new(0, 0, 0, 42),
+	self.accessPromptSubtitle = newLabel(accessPrompt, "Choose access:", P.textDim, {
+		Size = UDim2.new(1, 0, 0, 20),
+		Position = UDim2.fromOffset(0, 44),
 	})
 	-- Three-mode panel (shown when the zone is empty)
 	local modePanel = newFrame(accessPrompt, {
 		Name = "ModePanel",
-		Position = UDim2.new(0, 12, 1, -86),
-		Size = UDim2.new(1, -24, 0, 70),
+		Position = UDim2.new(0, 12, 1, -80),
+		Size = UDim2.new(1, -24, 0, 64),
 		BackgroundTransparency = 1,
 	})
 	self.accessFriendsBtn = newButton(modePanel, "Friends", Color3.fromRGB(60, 110, 150), {
@@ -189,43 +238,66 @@ function LobbyUI.create(playerGui)
 	self.modePanel = modePanel
 	-- Single Join button (shown when the zone is hosted and joinable)
 	self.accessJoinBtn = newButton(accessPrompt, "Join Zone", Color3.fromRGB(70, 140, 90), {
-		Size = UDim2.new(1, -24, 0, 64),
-		Position = UDim2.new(0, 12, 1, -80),
+		Size = UDim2.new(1, -24, 0, 58),
+		Position = UDim2.new(0, 12, 1, -74),
 		Visible = false,
 	})
 
-	-- ---------------- Lobby timer (top-center) ----------------
+	-- ---------------- Pit portal prompt (appears near the portal) ----------------
+	local pitPrompt = newFrame(screen, {
+		Name = "PitPrompt",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -110),
+		Size = UDim2.fromOffset(440, 150),
+		Visible = false,
+	})
+	styleCard(pitPrompt)
+	UIStyle.stroke(pitPrompt, { Color = EMBER, Thickness = 1.5, Transparency = 0.35 })
+	self.pitPrompt = pitPrompt
+	newLabel(pitPrompt, "🔥 THE PIT", EMBER, {
+		Size = UDim2.new(1, 0, 0, 32),
+		Position = UDim2.fromOffset(0, 8),
+	})
+	newLabel(pitPrompt, "Free-for-all warm-up: sparring bots, rivals, and a target dummy", P.textDim, {
+		Size = UDim2.new(1, -24, 0, 20),
+		Position = UDim2.fromOffset(12, 42),
+	})
+	self.pitEnterBtn = newButton(pitPrompt, "ENTER THE PIT", EMBER, {
+		Size = UDim2.new(1, -24, 0, 56),
+		Position = UDim2.new(0, 12, 1, -70),
+		TextColor3 = Color3.fromRGB(30, 18, 10),
+	})
+
+	-- ---------------- Lobby timer (top-center pill) ----------------
 	local timerFrame = newFrame(screen, {
 		Name = "LobbyTimer",
 		AnchorPoint = Vector2.new(0.5, 0),
 		Position = UDim2.new(0.5, 0, 0, 12),
-		Size = UDim2.fromOffset(260, 48),
-		BackgroundTransparency = 0.1,
+		Size = UDim2.fromOffset(240, 44),
 		Visible = false,
 	})
+	styleCard(timerFrame)
 	self.timerFrame = timerFrame
-	self.timerLabel = newLabel(timerFrame, "Match in 2:00", Color3.fromRGB(240, 240, 240), {
-		Size = UDim2.fromScale(1, 1),
+	self.timerLabel = newLabel(timerFrame, "Match in 2:00", P.text, {
+		Size = UDim2.new(1, -20, 1, -12),
+		Position = UDim2.fromOffset(10, 6),
 	})
 
-	-- ---------------- Start Now button ----------------
-	-- In production this only starts a match the matchmaker could already
-	-- form from the current zone groups (it just skips the remaining timer).
-	local startNowBtn = newButton(screen, "Start Match Now", Color3.fromRGB(140, 100, 60), {
+	-- ---------------- Action buttons (top-center column) ----------------
+	local startNowBtn = newButton(screen, "⚔  START MATCH NOW", Color3.fromRGB(150, 105, 55), {
 		Name = "StartNowBtn",
 		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, 70),
-		Size = UDim2.fromOffset(220, 36),
+		Position = UDim2.new(0.5, 0, 0, 66),
+		Size = UDim2.fromOffset(230, 38),
 	})
 	self.startNowBtn = startNowBtn
 
-	-- ---------------- Practice button (testing) ----------------
-	-- Solo practice room with a respawning target dummy — used to feel out auto-attacks.
-	local practiceBtn = newButton(screen, "Practice", Color3.fromRGB(80, 120, 160), {
+	-- Quick entry to The Pit (same as walking to the portal).
+	local practiceBtn = newButton(screen, "🔥  ENTER THE PIT", Color3.fromRGB(150, 75, 45), {
 		Name = "PracticeBtn",
 		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, 112),
-		Size = UDim2.fromOffset(220, 36),
+		Position = UDim2.new(0.5, 0, 0, 110),
+		Size = UDim2.fromOffset(230, 38),
 	})
 	self.practiceBtn = practiceBtn
 
@@ -235,8 +307,8 @@ function LobbyUI.create(playerGui)
 		AnchorPoint = Vector2.new(1, 0),
 		Position = UDim2.new(1, -16, 0, 16),
 		Size = UDim2.fromOffset(180, 36),
-		Visible = false,
 	})
+	matchBtn.Visible = false
 	self.leaveMatchBtn = matchBtn
 
 	-- ---------------- Shop panel ----------------
@@ -244,23 +316,24 @@ function LobbyUI.create(playerGui)
 		Name = "ShopPanel",
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, -16, 0.5, 0),
-		Size = UDim2.fromOffset(360, 540),
-		BackgroundTransparency = 0.1,
+		Size = UDim2.fromOffset(360, 560),
 		Visible = false,
 	})
+	styleCard(shop)
 	self.shopPanel = shop
-	newLabel(shop, "RUNE SHOP", Color3.fromRGB(240, 220, 120), {
-		Size = UDim2.new(1, 0, 0, 36),
-		Position = UDim2.new(0, 0, 0, 4),
+	newLabel(shop, "RUNE SHOP", P.accent, {
+		Size = UDim2.new(1, 0, 0, 32),
+		Position = UDim2.fromOffset(0, 8),
 	})
+	accentBar(shop, P.accent, 42)
 	self.shopGoldLabel = newLabel(shop, "Gold: 0", Color3.fromRGB(240, 210, 90), {
-		Size = UDim2.new(1, 0, 0, 28),
-		Position = UDim2.new(0, 0, 0, 42),
+		Size = UDim2.new(1, 0, 0, 26),
+		Position = UDim2.fromOffset(0, 50),
 	})
 
 	local catList = newFrame(shop, {
 		Size = UDim2.new(1, -16, 0, 290),
-		Position = UDim2.new(0, 8, 0, 78),
+		Position = UDim2.fromOffset(8, 84),
 		BackgroundTransparency = 1,
 	})
 	local catLayout = Instance.new("UIListLayout")
@@ -273,33 +346,35 @@ function LobbyUI.create(playerGui)
 		local rune = Runes.Catalog[runeKey]
 		local row = newFrame(catList, {
 			Size = UDim2.new(1, 0, 0, 56),
-			BackgroundColor3 = Color3.fromRGB(45, 45, 55),
+			BackgroundColor3 = P.panel,
 		})
-		local titleLabel = newLabel(row, rune.Name, Color3.fromRGB(240, 240, 240), {
-			Size = UDim2.new(0.5, 0, 0.5, 0),
-			Position = UDim2.fromOffset(8, 4),
+		UIStyle.corner(row, 8)
+		UIStyle.stroke(row, { Color = P.panelLight, Thickness = 1, Transparency = 0.5 })
+		local titleLabel = newLabel(row, rune.Name, P.text, {
+			Size = UDim2.fromScale(0.5, 0.5),
+			Position = UDim2.fromOffset(10, 4),
 		})
 		titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-		local descLabel = newLabel(row, "", Color3.fromRGB(180, 180, 180), {
+		local descLabel = newLabel(row, "", P.textDim, {
 			Size = UDim2.new(0.5, -8, 0.5, -4),
-			Position = UDim2.new(0, 8, 0.5, 0),
+			Position = UDim2.new(0, 10, 0.5, 0),
 		})
 		descLabel.TextXAlignment = Enum.TextXAlignment.Left
 		local buyBtn = newButton(row, "Buy T1 (50g)", Color3.fromRGB(70, 110, 70), {
 			AnchorPoint = Vector2.new(1, 0.5),
 			Position = UDim2.new(1, -8, 0.5, 0),
-			Size = UDim2.fromOffset(140, 40),
+			Size = UDim2.fromOffset(130, 40),
 		})
 		self.runeRows[runeKey] = { row = row, desc = descLabel, buyBtn = buyBtn }
 	end
 
-	newLabel(shop, "SUMMONER SPELL", Color3.fromRGB(240, 220, 120), {
-		Size = UDim2.new(1, 0, 0, 28),
-		Position = UDim2.new(0, 0, 0, 380),
+	newLabel(shop, "SUMMONER SPELL", P.accent, {
+		Size = UDim2.new(1, 0, 0, 26),
+		Position = UDim2.fromOffset(0, 384),
 	})
 	local spellRow = newFrame(shop, {
 		Size = UDim2.new(1, -16, 0, 140),
-		Position = UDim2.new(0, 8, 0, 412),
+		Position = UDim2.fromOffset(8, 414),
 		BackgroundTransparency = 1,
 	})
 	local spellLayout = Instance.new("UIListLayout")
@@ -307,6 +382,7 @@ function LobbyUI.create(playerGui)
 	spellLayout.Padding = UDim.new(0, 4)
 	spellLayout.Parent = spellRow
 	self.spellButtons = {}
+	self.spellStrokes = {}
 	for _, key in ipairs(Runes.SummonerSpellOrder) do
 		local spell = Runes.SummonerSpells[key]
 		local btn = newButton(spellRow, spell.Name .. " — " .. spell.Description, spell.Color, {
@@ -314,14 +390,18 @@ function LobbyUI.create(playerGui)
 			TextColor3 = Color3.fromRGB(20, 20, 20),
 		})
 		btn:SetAttribute("SpellKey", key)
+		-- Selection ring, toggled in _renderShop.
+		self.spellStrokes[key] = UIStyle.stroke(btn, { Color = Color3.fromRGB(255, 255, 255), Thickness = 3, Transparency = 1 })
 		self.spellButtons[key] = btn
 	end
 
-	self.shopToggleHint = newLabel(screen, "Press B for Rune Shop", Color3.fromRGB(220, 220, 220), {
+	local hint = newLabel(screen, "Press B for Rune Shop", P.textDim, {
 		AnchorPoint = Vector2.new(1, 1),
 		Position = UDim2.new(1, -16, 1, -16),
 		Size = UDim2.fromOffset(220, 24),
 	})
+	hint.TextXAlignment = Enum.TextXAlignment.Right
+	self.shopToggleHint = hint
 
 	self:_wireInputs()
 	self:_render()
@@ -347,13 +427,16 @@ function LobbyUI:_wireInputs()
 		Remotes.get("LeaveZone"):FireServer()
 	end)
 
-	-- Start Now button (testing): start a match immediately, no timer.
+	-- Start Now button: start a match immediately if a legal pairing exists.
 	self.startNowBtn.MouseButton1Click:Connect(function()
 		Remotes.get("StartNow"):FireServer()
 	end)
 
-	-- Practice button: teleport into the practice room with a target dummy.
+	-- Both Pit entries fire the same remote.
 	self.practiceBtn.MouseButton1Click:Connect(function()
+		Remotes.get("StartPractice"):FireServer()
+	end)
+	self.pitEnterBtn.MouseButton1Click:Connect(function()
 		Remotes.get("StartPractice"):FireServer()
 	end)
 
@@ -406,27 +489,21 @@ function LobbyUI:_renderShop()
 		local nextTier = tierToBuy(owned)
 		local tierData = rune.Tiers[nextTier]
 		if tierData then
+			local affordable = self.gold >= tierData.Cost
 			ui.buyBtn.Text = ("Buy T%d (%dg)"):format(nextTier, tierData.Cost)
-			ui.buyBtn.AutoButtonColor = self.gold >= tierData.Cost
-			ui.buyBtn.BackgroundColor3 = (self.gold >= tierData.Cost) and Color3.fromRGB(70, 110, 70) or Color3.fromRGB(60, 60, 60)
-			ui.buyBtn.Active = self.gold >= tierData.Cost
+			ui.buyBtn.BackgroundColor3 = affordable and Color3.fromRGB(70, 110, 70) or Color3.fromRGB(60, 60, 60)
+			ui.buyBtn.Active = affordable
 			local bonusText = ("+%d"):format(tierData.Bonus)
 			ui.desc.Text = "Owned: T" .. owned .. "  •  Next: " .. bonusText
 		else
 			ui.buyBtn.Text = "MAX"
-			ui.buyBtn.AutoButtonColor = false
 			ui.buyBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 60)
 			ui.buyBtn.Active = false
 			ui.desc.Text = "Owned: T" .. owned .. " (maxed)"
 		end
 	end
-	for key, btn in pairs(self.spellButtons) do
-		if key == self.summonerSpell then
-			btn.BorderSizePixel = 4
-			btn.BorderColor3 = Color3.fromRGB(255, 255, 255)
-		else
-			btn.BorderSizePixel = 0
-		end
+	for key, stroke in pairs(self.spellStrokes) do
+		stroke.Transparency = (key == self.summonerSpell) and 0 or 1
 	end
 end
 
@@ -448,29 +525,55 @@ function LobbyUI:_renderLobby()
 	end
 	for id = 1, Config.Matchmaking.ZoneCount do
 		local zone = self.zones[id]
+		local zoneColor = ZONE_ROW_COLORS[((id - 1) % #ZONE_ROW_COLORS) + 1]
 		local row = newFrame(self.zoneListFrame, {
 			LayoutOrder = id,
-			Size = UDim2.new(1, 0, 0, 56),
-			BackgroundColor3 = Color3.fromRGB(40, 40, 50),
+			Size = UDim2.new(1, 0, 0, 54),
+			BackgroundColor3 = P.panel,
 		})
-		local title = newLabel(row, "Zone " .. id, Color3.fromRGB(240, 220, 120), {
-			Size = UDim2.new(1, -8, 0, 24),
-			Position = UDim2.fromOffset(8, 2),
+		UIStyle.corner(row, 8)
+		UIStyle.stroke(row, { Color = P.panelLight, Thickness = 1, Transparency = 0.55 })
+
+		-- Colored identity dot matching the pad in the world.
+		local dot = newFrame(row, {
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 10, 0.5, 0),
+			Size = UDim2.fromOffset(12, 12),
+			BackgroundColor3 = zoneColor,
+		})
+		UIStyle.corner(dot, 6)
+
+		local title = newLabel(row, "Zone " .. id, P.text, {
+			Size = UDim2.new(1, -40, 0, 22),
+			Position = UDim2.fromOffset(30, 5),
 		})
 		title.TextXAlignment = Enum.TextXAlignment.Left
+
 		local count = zone and zone.count or 0
-		local max = Config.Matchmaking.MaxPerZone
-		local status = "open"
-		if zone then
-			status = zone.status
+		local max = (zone and zone.max) or Config.Matchmaking.MaxPerZone
+		local status = zone and zone.status or "open"
+		local statusStr, statusColor
+		if status == "in_match" then
+			statusStr = "in match"
+			statusColor = P.textDim
+		elseif count >= max then
+			statusStr = ("%d / %d  •  full"):format(count, max)
+			statusColor = P.bad
+		elseif count > 0 then
+			statusStr = ("%d / %d  •  waiting"):format(count, max)
+			statusColor = P.good
+		else
+			statusStr = ("%d / %d  •  open"):format(count, max)
+			statusColor = P.textDim
 		end
-		local statusStr = ("%d / %d  •  %s"):format(count, max, status)
 		if zone and zone.accessMode == "friends" then
-			statusStr = statusStr .. "  •  friends only"
+			statusStr = statusStr .. "  •  friends"
+		elseif zone and zone.accessMode == "solo" then
+			statusStr = statusStr .. "  •  solo"
 		end
-		local sub = newLabel(row, statusStr, Color3.fromRGB(200, 200, 200), {
-			Size = UDim2.new(1, -8, 0, 24),
-			Position = UDim2.new(0, 8, 0, 26),
+		local sub = newLabel(row, statusStr, statusColor, {
+			Size = UDim2.new(1, -40, 0, 18),
+			Position = UDim2.fromOffset(30, 29),
 		})
 		sub.TextXAlignment = Enum.TextXAlignment.Left
 	end
@@ -482,7 +585,7 @@ function LobbyUI:_renderZone()
 		return
 	end
 	self.zoneTitleLabel.Text = "Zone " .. self.zoneId
-	self.zonePlayersLabel.Text = ("%d player(s) in zone"):format(zone.count)
+	self.zonePlayersLabel.Text = ("%d player(s) in zone — waiting for the timer or Start Now"):format(zone.count)
 	self.zoneMembersLabel.Text = "Members:\n" .. table.concat(zone.players or {}, "\n")
 	local modeText = "Anyone"
 	if zone.accessMode == "solo" then
@@ -533,20 +636,23 @@ function LobbyUI:_renderAccessPrompt()
 	end
 end
 
+function LobbyUI:_renderPitPrompt()
+	self.pitPrompt.Visible = (self.state == "lobby") and self.nearPitPortal == true
+end
+
 function LobbyUI:_render()
 	self.lobbyPanel.Visible = (self.state == "lobby")
 	self.zonePanel.Visible = (self.state == "in_zone")
 	self.leaveMatchBtn.Visible = (self.state == "in_match")
+	self.leaveMatchBtn.Text = self.pitMode and "Leave the Pit (Esc)" or "Leave Match (Esc)"
 	self.shopToggleHint.Visible = (self.state == "lobby")
 	self.startNowBtn.Visible = (self.state == "lobby")
 	self.practiceBtn.Visible = (self.state == "lobby")
 	if self.state ~= "lobby" then
 		self.shopPanel.Visible = false
-	end
-	-- Access prompt is only relevant in the lobby state while standing on a pad.
-	if self.state ~= "lobby" then
 		self.accessPrompt.Visible = false
 		self.hoveredZoneId = nil
+		self.nearPitPortal = false
 	end
 	if self.state == "lobby" then
 		self:_renderLobby()
@@ -554,6 +660,7 @@ function LobbyUI:_render()
 		self:_renderZone()
 	end
 	self:_renderAccessPrompt()
+	self:_renderPitPrompt()
 	self:_renderShop()
 end
 
@@ -580,7 +687,7 @@ function LobbyUI:_tickTimer()
 	local remaining = math.max(0, self._timerRemaining - elapsed)
 	local mm = math.floor(remaining / 60)
 	local ss = math.floor(remaining % 60)
-	self.timerLabel.Text = ("Match in %d:%02d"):format(mm, ss)
+	self.timerLabel.Text = ("⚔  Match in %d:%02d"):format(mm, ss)
 	self.timerFrame.Visible = true
 end
 
@@ -602,8 +709,27 @@ function LobbyUI:_collectZonePads()
 	return pads
 end
 
+-- The Pit portal gate part (tagged with the PitPortal attribute, lives in
+-- Lobby.Decor). Cached after the first successful find.
+function LobbyUI:_findPitPortal()
+	if self._pitPortal and self._pitPortal.Parent then
+		return self._pitPortal
+	end
+	local lobby = Workspace:FindFirstChild("Lobby")
+	if not lobby then
+		return nil
+	end
+	for _, inst in ipairs(lobby:GetDescendants()) do
+		if inst:IsA("BasePart") and inst:GetAttribute("PitPortal") then
+			self._pitPortal = inst
+			return inst
+		end
+	end
+	return nil
+end
+
 -- Heartbeat-driven proximity check: when the local character is standing on a
--- pad (and we're still in the lobby), show the Open/Private prompt for that zone.
+-- pad (or by the Pit portal) while in the lobby, show the matching prompt.
 function LobbyUI:_startProximityWatch()
 	local function nearestPad()
 		local char = self.player.Character
@@ -625,13 +751,32 @@ function LobbyUI:_startProximityWatch()
 		return bestId
 	end
 
+	local function nearPortal()
+		local char = self.player.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if not root then
+			return false
+		end
+		local portal = self:_findPitPortal()
+		if not portal then
+			return false
+		end
+		local dx = root.Position.X - portal.Position.X
+		local dz = root.Position.Z - portal.Position.Z
+		return (dx * dx + dz * dz) <= PIT_PORTAL_RADIUS * PIT_PORTAL_RADIUS
+	end
+
 	RunService.Heartbeat:Connect(function()
 		self:_tickTimer()
 		if self.state ~= "lobby" then
 			if self.accessPrompt.Visible then
 				self.accessPrompt.Visible = false
 			end
+			if self.pitPrompt.Visible then
+				self.pitPrompt.Visible = false
+			end
 			self.hoveredZoneId = nil
+			self.nearPitPortal = false
 			return
 		end
 		local id = nearestPad()
@@ -639,12 +784,26 @@ function LobbyUI:_startProximityWatch()
 			self.hoveredZoneId = id
 			self:_renderAccessPrompt()
 		end
+		local near = nearPortal()
+		if near ~= self.nearPitPortal then
+			self.nearPitPortal = near
+			self:_renderPitPrompt()
+		end
 	end)
 end
 
 function LobbyUI:setState(state, zoneId)
 	self.state = state
 	self.zoneId = zoneId
+	if state ~= "in_match" then
+		self.pitMode = false
+	end
+	self:_render()
+end
+
+-- Called (via init.client) when the server confirms we entered The Pit.
+function LobbyUI:setPitMode(on)
+	self.pitMode = on and true or false
 	self:_render()
 end
 

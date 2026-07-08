@@ -335,15 +335,65 @@ Config.Matchmaking = {
 }
 
 Config.LobbyOrigin = Vector3.new(0, 600, 0) -- placed far from arena
-Config.LobbyRadius = 70 -- ring radius for zone pads
 
 -- =====================================================================
--- PRACTICE ROOM — quick test arena with a respawning target dummy.
+-- THE PIT — the lobby's warm-up brawl. One shared free-for-all arena
+-- where waiting players (1–5+) fight sparring bots, each other, and a
+-- target dummy. Every player in the Pit is their own one-man team
+-- ("FFA<userId>"), which is what makes all the existing "enemy = other
+-- team" checks treat everyone as hostile.
 -- =====================================================================
 Config.PracticeOrigin = Vector3.new(0, 1200, 0)
 Config.PracticeRoomSize = Vector3.new(180, 1, 180)
-Config.PracticeDummyOffset = Vector3.new(30, 4, 0) -- relative to PracticeOrigin
+Config.PracticeDummyOffset = Vector3.new(45, 4, 45) -- relative to PracticeOrigin
 Config.PracticeDummyMaxHP = 1000
 Config.PracticeDummyRespawnDelay = 5
+
+Config.Pit = {
+	-- Enough to buy a real item build against the dummy/bots; kills top it up.
+	StartingGold = 5000,
+	BotKillGold = 100,
+	BotKillXP = 45, -- bots feed XP so leveling can be practiced too
+	PlayerKillGold = 250, -- Pit PvP pays out here (Pit deaths skip ScoreService)
+	PlayerKillXP = 120,
+	RespawnDelay = 4, -- fixed + short — the Pit is for action, not death timers
+	SpawnProtection = 2, -- seconds of invulnerability after (re)spawning in
+
+	-- Sparring bots. Live count = BotBaseCount + (players-in-pit − 1), capped.
+	BotBaseCount = 2,
+	BotMaxCount = 6,
+	BotRespawnDelay = 5,
+	-- A bot chasing beyond this distance from its home pad gives up, walks
+	-- back, and rapidly heals (same idea as jungle leashing).
+	LeashRange = 85,
+	Bots = {
+		-- Melee chaser. Tanky-ish so it survives long enough to pressure you.
+		Bruiser = {
+			MaxHP = 700,
+			WalkSpeed = 13,
+			AttackDamage = 16,
+			AttackRange = 8,
+			AttackInterval = 1.1,
+			AggroRadius = 45,
+			Size = Vector3.new(3.2, 4.6, 2.6),
+			Projectile = false,
+		},
+		-- Ranged poker. Squishier, keeps its distance, teaches dodging.
+		Slinger = {
+			MaxHP = 420,
+			WalkSpeed = 11,
+			AttackDamage = 12,
+			AttackRange = 26,
+			AttackInterval = 1.5,
+			AggroRadius = 45,
+			Size = Vector3.new(2.4, 4.0, 2.2),
+			Projectile = true,
+			ProjectileSpeed = 55,
+			ProjectileRadius = 0.9,
+		},
+	},
+	-- Bots spawn cycling through this sequence.
+	BotSequence = { "Bruiser", "Slinger", "Bruiser", "Bruiser", "Slinger", "Bruiser" },
+}
 
 return Config

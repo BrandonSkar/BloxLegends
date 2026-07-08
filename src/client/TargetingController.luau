@@ -68,6 +68,16 @@ local function ancestorWithAttribute(part, attr)
 	return nil
 end
 
+-- Human-readable target name from a minion model's Team attribute.
+local function minionDisplayName(team)
+	if team == "Pit" then
+		return "Sparring Bot"
+	elseif team == "Jungle" then
+		return "Jungle Monster"
+	end
+	return (team or "?") .. " Minion"
+end
+
 -- Is the given enemy player currently hidden from this client (in a bush
 -- I'm not in, or invisible from Smoke Bomb)? Filters smart-target picks
 -- and direct clicks alike — you can't damage what you can't see.
@@ -121,7 +131,7 @@ function TargetingController:_pickByCursor()
 		local id = minionRoot:GetAttribute("MinionId")
 		local team = minionRoot:GetAttribute("Team")
 		if typeof(id) == "number" then
-			return { type = "minion", id = id, team = team, name = team .. " Minion" }
+			return { type = "minion", id = id, team = team, name = minionDisplayName(team) }
 		end
 	end
 	local playerRoot = ancestorWithAttribute(part, "PlayerId")
@@ -201,7 +211,7 @@ function TargetingController:_pickByPriority()
 			if mTeam and mTeam ~= team and typeof(mId) == "number" and root then
 				local d = (root.Position - localPos).Magnitude
 				if d <= consider and (not bestMinionDist or d < bestMinionDist) then
-					bestMinion = { type = "minion", id = mId, team = mTeam, name = mTeam .. " Minion" }
+					bestMinion = { type = "minion", id = mId, team = mTeam, name = minionDisplayName(mTeam) }
 					bestMinionDist = d
 				end
 			end

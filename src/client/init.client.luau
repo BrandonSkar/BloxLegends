@@ -236,6 +236,15 @@ Remotes.get("MatchStarted").OnClientEvent:Connect(function(team)
 	print("[Client] Match started — team:", team)
 end)
 
+-- Entering The Pit (shared FFA warm-up arena). Relabel the leave button and
+-- flash a welcome once the HUD is up.
+Remotes.get("PracticeStarted").OnClientEvent:Connect(function()
+	lobbyUI:setPitMode(true)
+	task.delay(0.5, function()
+		hud:announce("Welcome to THE PIT — everyone here is fair game!", Color3.fromRGB(255, 120, 60), 4)
+	end)
+end)
+
 Remotes.get("MatchEnded").OnClientEvent:Connect(function(reason)
 	-- Big VICTORY/DEFEAT banner (+ jingle) based on which team the reason names.
 	local blueWon = string.match(reason or "", "^Blue wins") ~= nil

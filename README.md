@@ -22,9 +22,9 @@ One place runs in three roles (`src/shared/ServerRole.luau`):
 - **local** — Studio. All-in-one: lobby + matchmaking + the match in one
   server. This is what Studio multi-client testing uses.
 - **lobby** — a published public server. Hosts the lobby, matchmaking zones,
-  and the practice room. When a group is paired it **reserves a private
-  server** and teleports the group into it — so any number of matches run
-  concurrently, each on its own server.
+  and The Pit (the FFA warm-up arena). When a group is paired it **reserves a
+  private server** and teleports the group into it — so any number of matches
+  run concurrently, each on its own server.
 - **match** — a reserved server. Runs exactly one match, then teleports
   everyone back to a public lobby server.
 
@@ -60,9 +60,19 @@ round trip but not a rejoin. Reserved-server flow can only be tested on a
   death screen countdown.
 - **Recall** — 8s channel back to base; cancelled by damage/movement/casts.
   Base zone regenerates HP and gates the shop.
-- **Practice room** — available from the lobby (also on published lobby
-  servers): respawning target dummy, 10k gold to test item builds, recall
-  returns you to the practice spawn.
+- **The Pit** — the lobby's 1–5+ player warm-up brawl (enter via the glowing
+  portal or the "Enter The Pit" button; also on published lobby servers).
+  Every entrant is their own one-man team, so it's true free-for-all PvP on
+  top of respawning **sparring bots** (melee Bruisers + ranged Slingers with
+  chase/leash AI that respect ability CC — stuns, slows, roots, knockups,
+  pulls), a target dummy, an in-world **PIT RANKINGS** board, kill gold + XP,
+  short fixed respawns with brief spawn protection, and 5k starting gold to
+  test item builds (the shop works anywhere in the Pit; the strong regen only
+  ticks out of combat). Bot count scales with how many players are inside.
+- **Lobby hub** — central spawn plaza with glowing walkways to the queue-zone
+  row, a columned rune-shop pavilion, banner-lined paths, perimeter pylons,
+  and the ember Pit portal. Cosmetics rebuild idempotently into
+  `Lobby/Decor`, so the look applies to fresh and baked lobbies alike.
 - **HUD** — HP/shield/XP bars, ability cooldowns, kill feed, center
   announcements, team score + match timer, minimap (champions, minions,
   towers, jungle), Tab scoreboard (K/D/A, CS, gold), death overlay, and a

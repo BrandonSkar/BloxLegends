@@ -33,6 +33,7 @@ local TEAM_COLOR = {
 	Blue = Color3.fromRGB(100, 180, 255),
 	Red = Color3.fromRGB(255, 110, 100),
 	Jungle = Color3.fromRGB(190, 140, 255),
+	Pit = Color3.fromRGB(255, 140, 70), -- sparring bots in The Pit
 }
 
 function Minimap.new()

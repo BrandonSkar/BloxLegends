@@ -314,12 +314,18 @@ function MinionService:spawn(team, typeKey, slotIndex, hpMult, dmgMult)
 	return entry
 end
 
--- ===== Displacement CC (practice dummy only) =====
--- These are no-ops on regular minions so we don't disturb lane pathing.
-local DUMMY_DISPLACE_DURATION = 0.25
+-- ===== Displacement / status CC (practice dummy + pit bots only) =====
+-- No-ops on lane/jungle minions so we don't disturb their pathing. The dummy's
+-- displacement is animated by _tick below; pit bots read the same cc* fields
+-- from their own AI tick in PracticeService.
+local DISPLACE_DURATION = 0.25
 
-function MinionService:applyDummyKnockback(entry, fromPos, distance)
-	if not (entry and entry.isDummy and entry.alive) then
+local function acceptsDisplacement(entry)
+	return entry and entry.alive and (entry.isDummy or entry.isPitBot)
+end
+
+function MinionService:applyKnockbackToMinion(entry, fromPos, distance)
+	if not acceptsDisplacement(entry) then
 		return
 	end
 	local pos = entry.root.Position
@@ -327,12 +333,12 @@ function MinionService:applyDummyKnockback(entry, fromPos, distance)
 	if dir.Magnitude < 0.01 then
 		return
 	end
-	entry.ccHVel = dir.Unit * (distance / DUMMY_DISPLACE_DURATION)
-	entry.ccHEndAt = os.clock() + DUMMY_DISPLACE_DURATION
+	entry.ccHVel = dir.Unit * (distance / DISPLACE_DURATION)
+	entry.ccHEndAt = os.clock() + DISPLACE_DURATION
 end
 
-function MinionService:applyDummyPull(entry, towardPos, distance)
-	if not (entry and entry.isDummy and entry.alive) then
+function MinionService:applyPullToMinion(entry, towardPos, distance)
+	if not acceptsDisplacement(entry) then
 		return
 	end
 	local pos = entry.root.Position
@@ -341,19 +347,42 @@ function MinionService:applyDummyPull(entry, towardPos, distance)
 		return
 	end
 	-- Apply the full pull distance to match knockback behavior. The room-edge
-	-- clamp in _tick keeps the dummy from leaving the practice arena even if
-	-- the pull would overshoot.
-	entry.ccHVel = dir.Unit * (distance / DUMMY_DISPLACE_DURATION)
-	entry.ccHEndAt = os.clock() + DUMMY_DISPLACE_DURATION
+	-- clamp (dummy: _tick below; bots: PracticeService) keeps the target inside
+	-- the practice arena even if the pull would overshoot.
+	entry.ccHVel = dir.Unit * (distance / DISPLACE_DURATION)
+	entry.ccHEndAt = os.clock() + DISPLACE_DURATION
 end
 
-function MinionService:applyDummyKnockup(entry, height, duration)
-	if not (entry and entry.isDummy and entry.alive) then
+function MinionService:applyKnockupToMinion(entry, height, duration)
+	if not acceptsDisplacement(entry) then
 		return
 	end
 	entry.ccVStartAt = os.clock()
 	entry.ccVDuration = math.max(0.1, duration or 0.6)
 	entry.ccVHeight = height or 8
+end
+
+-- Hard CC on pit bots so stuns/slows/roots can be practiced on something that
+-- actually moves. The dummy never moves, so these are bot-only.
+function MinionService:applyStunToMinion(entry, duration)
+	if not (entry and entry.alive and entry.isPitBot) then
+		return
+	end
+	entry.ccStunUntil = math.max(entry.ccStunUntil or 0, os.clock() + (duration or 1))
+end
+
+function MinionService:applySlowToMinion(entry, magnitude, duration)
+	if not (entry and entry.alive and entry.isPitBot) then
+		return
+	end
+	entry.ccSlow = { magnitude = math.clamp(magnitude or 0.3, 0, 1), expiresAt = os.clock() + (duration or 2) }
+end
+
+function MinionService:applyRootToMinion(entry, duration)
+	if not (entry and entry.alive and entry.isPitBot) then
+		return
+	end
+	entry.ccRootUntil = math.max(entry.ccRootUntil or 0, os.clock() + (duration or 1))
 end
 
 -- DoT for minion targets (used so Ignite-style abilities tick on the practice
@@ -396,8 +425,8 @@ function MinionService:applyDamage(entry, amount, killerPlayer)
 		entry.alive = false
 		local deathPos = entry.root and entry.root.Position
 		-- Practice dummies don't pay out gold — they're a training target.
-		-- Jungle monsters have their own reward flow (JungleService).
-		if not entry.isDummy and not entry.isJungle then
+		-- Jungle monsters and pit bots have their own reward flows.
+		if not entry.isDummy and not entry.isJungle and not entry.isPitBot then
 			-- Team share: every member of the enemy team gets MinionTeamGold
 			-- regardless of who landed the killing blow.
 			local enemyTeam = (entry.team == "Blue") and "Red" or "Blue"
@@ -420,6 +449,9 @@ function MinionService:applyDamage(entry, amount, killerPlayer)
 		if entry.isDummy and self.practiceService then
 			-- Practice dummy: hand off to PracticeService for respawn timing.
 			self.practiceService:onDummyKilled(entry)
+		elseif entry.isPitBot and self.practiceService then
+			-- Pit bot: kill reward + respawn scheduling live in PracticeService.
+			self.practiceService:onBotKilled(entry, killerPlayer)
 		elseif entry.isJungle and self.jungleService then
 			-- Jungle monster: rewards (gold/XP/buff) + respawn scheduling.
 			self.jungleService:onJungleKilled(entry, killerPlayer)
@@ -447,9 +479,9 @@ end
 local function findNearestEnemyTarget(self, entry)
 	local pos = entry.root.Position
 	local best, bestDist
-	-- Enemy minions (lane minions ignore neutral jungle monsters)
+	-- Enemy minions (lane minions ignore neutral jungle monsters + pit bots)
 	for otherId, other in pairs(self.minions) do
-		if other.alive and other.team ~= entry.team and not other.isJungle and not other.isDummy then
+		if other.alive and other.team ~= entry.team and not other.isJungle and not other.isDummy and not other.isPitBot then
 			local d = (other.root.Position - pos).Magnitude
 			if d <= entry.aggroRadius then
 				if not bestDist or d < bestDist then
@@ -579,7 +611,9 @@ local function spawnMinionProjectile(self, entry, target)
 	local r = entry.projectileRadius or 1
 	proj.Size = Vector3.new(r * 2, r * 2, r * 2)
 	proj.Material = Enum.Material.Neon
-	proj.Color = Config.Teams[entry.team].Color
+	-- Pit bots aren't on a Config.Teams team — they carry their own color.
+	local teamData = Config.Teams[entry.team]
+	proj.Color = entry.projectileColor or (teamData and teamData.Color) or Color3.fromRGB(230, 230, 230)
 	proj.Anchored = true
 	proj.CanCollide = false
 	proj.CanQuery = false
@@ -614,6 +648,22 @@ local function spawnMinionProjectile(self, entry, target)
 		local step = math.min(dist, speed * dt)
 		proj.Position = proj.Position + toTarget.Unit * step
 	end)
+end
+
+-- Public wrapper so PracticeService's ranged bots reuse the homing-projectile
+-- visual + damage flow (tracks the live target, applies damage on impact).
+function MinionService:fireBotProjectile(entry, targetPlayer)
+	local char = targetPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return
+	end
+	spawnMinionProjectile(self, entry, {
+		type = "player",
+		id = targetPlayer.UserId,
+		player = targetPlayer,
+		root = root,
+	})
 end
 
 -- Boids-style separation. Returns a flat XZ vector pushing this minion away
@@ -656,8 +706,8 @@ function MinionService:_tick(dt)
 		if not entry.alive then
 			continue
 		end
-		-- Jungle monsters are driven by JungleService's own AI tick.
-		if entry.isJungle then
+		-- Jungle monsters and pit bots are driven by their own services' AI ticks.
+		if entry.isJungle or entry.isPitBot then
 			continue
 		end
 		-- Practice dummies don't run AI, but they react to displacement CC

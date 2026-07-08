@@ -36,6 +36,10 @@ function CombatService:setScoreService(svc)
 	self.scoreService = svc
 end
 
+function CombatService:setPracticeService(svc)
+	self.practiceService = svc
+end
+
 local function newEntry(maxHP, walkSpeed)
 	return {
 		hp = maxHP,
@@ -298,6 +302,11 @@ function CombatService:damagePlayer(target, amount, attackerPlayer)
 	if not e or not e.alive then
 		return
 	end
+	-- Champion-select is a safe pause: the player can't move or fight back yet
+	-- (matters in The Pit, where hostile players/bots share the room).
+	if e.selectingChampion then
+		return
+	end
 	-- Damage reduction (e.g. Iron Skin)
 	local now = os.clock()
 	if e.statuses.damageReduction and e.statuses.damageReduction.expiresAt > now then
@@ -318,6 +327,8 @@ function CombatService:damagePlayer(target, amount, attackerPlayer)
 	if amount <= 0 then
 		return
 	end
+	-- Out-of-combat marker (drives the Pit's regen gating).
+	e.lastDamagedAt = now
 	-- Kill/assist attribution: remember enemy champions who damaged this
 	-- player recently. Tower/minion/DoT executions credit the last of these.
 	if attackerPlayer and attackerPlayer ~= target and self.matchController then
@@ -360,8 +371,13 @@ function CombatService:damagePlayer(target, amount, attackerPlayer)
 		e.recentDamagers = {}
 		e.lastDamager = nil
 		-- Death timer scales with match time; captured now so the death screen
-		-- countdown and the actual respawn agree.
-		e.respawnDelay = (self.scoreService and self.scoreService:currentRespawnDelay()) or Config.RespawnDelay
+		-- countdown and the actual respawn agree. Pit deaths use a short fixed
+		-- timer instead — the Pit is for action, not waiting.
+		if e.practiceMode then
+			e.respawnDelay = Config.Pit.RespawnDelay
+		else
+			e.respawnDelay = (self.scoreService and self.scoreService:currentRespawnDelay()) or Config.RespawnDelay
+		end
 		e.deadUntil = now + e.respawnDelay
 		-- Clear all statuses (and timed buffs — you lose those on death).
 		e.statuses = {}
@@ -378,7 +394,11 @@ function CombatService:damagePlayer(target, amount, attackerPlayer)
 			end
 		end
 		self:onTargetRemoved("player", target.UserId)
-		if self.scoreService then
+		-- Pit deaths route to PracticeService (Pit-only kill feed + rankings
+		-- board) so a lobby brawl never pollutes real match stats.
+		if e.practiceMode and self.practiceService then
+			self.practiceService:onPitPlayerDeath(target, killer, assistIds, e.respawnDelay)
+		elseif self.scoreService then
 			self.scoreService:onChampionDeath(target, killer, assistIds, e.respawnDelay)
 		end
 	end
