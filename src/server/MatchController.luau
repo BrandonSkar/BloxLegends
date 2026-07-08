@@ -32,6 +32,10 @@ function MatchController:addGold(player, amount)
 		return
 	end
 	self.gold[player.UserId] = (self.gold[player.UserId] or 0) + amount
+	-- Track lifetime gold earned for the scoreboard (spending doesn't count).
+	if self.scoreService and amount > 0 then
+		self.scoreService:onGoldEarned(player, amount)
+	end
 	Remotes.get("GoldChanged"):FireClient(player, self.gold[player.UserId])
 end
 

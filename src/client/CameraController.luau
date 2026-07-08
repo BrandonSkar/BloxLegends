@@ -46,7 +46,11 @@ end
 function CameraController:_setMouseLook(enabled)
 	self.mouseLook = enabled
 	if enabled then
-		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+		-- LockCurrentPosition (not LockCenter): pin the cursor where it already
+		-- is while still reporting movement deltas. LockCenter under a Scriptable
+		-- camera teleports the cursor to a screen corner when released — which is
+		-- why the cursor jumped to the bottom-right after rotating.
+		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
 		UserInputService.MouseIconEnabled = false
 	else
 		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
@@ -128,6 +132,15 @@ function CameraController:start()
 end
 
 function CameraController:_update()
+	-- Keep ownership of the camera. Roblox flips CameraType back to Custom on
+	-- respawn, which wakes the default camera up again — then BOTH it and this
+	-- controller rotate on right-click (the "insanely fast" double-spin) and
+	-- fight over the mouse lock (cursor flicking to a corner on release).
+	-- Re-asserting Scriptable each frame keeps the default camera suppressed.
+	if self.camera.CameraType ~= Enum.CameraType.Scriptable then
+		self.camera.CameraType = Enum.CameraType.Scriptable
+	end
+
 	local character = self.player.Character
 	if not character then
 		return

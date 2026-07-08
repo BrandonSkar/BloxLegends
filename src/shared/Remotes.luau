@@ -29,7 +29,20 @@ local REMOTE_NAMES = {
 	RecallStart = "RemoteEvent", -- C→S: start channel
 	RecallCancel = "RemoteEvent", -- C↔S: client requests cancel / server announces cancel (reason)
 	RecallState = "RemoteEvent", -- S→C: ("channeling"|"complete"|"cancelled", duration?) — drives UI bar + FX
-	InBaseChanged = "RemoteEvent", -- S→C: (bool) — for HUD shop hint / future shop gate
+	InBaseChanged = "RemoteEvent", -- S→C: (bool) — for HUD shop hint / shop gate
+	-- In-match item shop (spends MATCH gold, only while in the base regen zone).
+	BuyItem = "RemoteEvent", -- C→S: (itemKey)
+	ItemsChanged = "RemoteEvent", -- S→C: ({ [itemKey] = count }) — owned items
+	BuyItemResult = "RemoteEvent", -- S→C: (ok, reason)
+	-- Score / kills / progression (all S→C, fired by ScoreService).
+	KillFeed = "RemoteEvent", -- ({ killerId?, killerName?, killerTeam?, victimId, victimName, victimTeam, gold, label?, spree })
+	TeamScoreChanged = "RemoteEvent", -- ({ Blue = kills, Red = kills })
+	MatchClock = "RemoteEvent", -- (serverStartTime from GetServerTimeNow) — drives the HUD match timer
+	MatchStats = "RemoteEvent", -- (array of { userId, name, team, champion, kills, deaths, assists, cs, gold }) — scoreboard
+	XPChanged = "RemoteEvent", -- (level, xp, xpToNext) — own XP bar
+	LevelUp = "RemoteEvent", -- (userId, newLevel) — all clients, level-up flash/sound
+	YouDied = "RemoteEvent", -- (respawnSeconds, killerName?) — death overlay + countdown
+	Announce = "RemoteEvent", -- (text, color?, duration?) — objective banners (boss, towers)
 
 	-- =========== Lobby / matchmaking ===========
 	-- Client → Server

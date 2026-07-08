@@ -40,12 +40,62 @@ function MinionService:setPracticeService(svc)
 	self.practiceService = svc
 end
 
+function MinionService:setScoreService(svc)
+	self.scoreService = svc
+end
+
+function MinionService:setJungleService(svc)
+	self.jungleService = svc
+end
+
 function MinionService:getMinion(id)
 	return self.minions[id]
 end
 
 function MinionService:allMinions()
 	return self.minions
+end
+
+-- Scale a color toward black (m<1) or white-clamped (m>1) for shading accents.
+local function shade(color, m)
+	return Color3.new(
+		math.clamp(color.R * m, 0, 1),
+		math.clamp(color.G * m, 0, 1),
+		math.clamp(color.B * m, 0, 1)
+	)
+end
+
+-- Bright team-colored glow for eyes / crest / caster orbs.
+local TEAM_GLOW = {
+	Blue = Color3.fromRGB(150, 220, 255),
+	Red = Color3.fromRGB(255, 150, 150),
+}
+
+-- Add an unanchored cosmetic part welded rigidly to the (anchored, code-moved)
+-- root, placed at `localCFrame` in the root's local space. Because the root is
+-- anchored and we drive it by CFrame, the weld carries the cosmetics along for
+-- free — so _tick still only has to move the root (+ head), never these.
+local function addWelded(model, root, name, localCFrame, props)
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = false
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Material = Enum.Material.SmoothPlastic
+	for k, v in pairs(props) do
+		p[k] = v
+	end
+	p.CFrame = root.CFrame * localCFrame
+	p.Parent = model
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = root
+	weld.Part1 = p
+	weld.Parent = p
+	return p
 end
 
 -- Build the visible minion model: a torso + head + name/HP billboard.
@@ -77,20 +127,79 @@ local function buildMinionModel(team, typeKey, typeData, spawnPos)
 	root.BottomSurface = Enum.SurfaceType.Smooth
 	root.Parent = model
 
+	local headD = size.X * 0.62
 	local head = Instance.new("Part")
 	head.Name = "Head"
+	head.Shape = Enum.PartType.Ball
 	head.Anchored = true
 	head.CanCollide = false
 	head.CanQuery = true
-	head.Size = Vector3.new(size.X * 0.55, size.X * 0.55, size.X * 0.55)
+	head.Size = Vector3.new(headD, headD, headD)
 	head.CFrame = root.CFrame + Vector3.new(0, size.Y / 2 + head.Size.Y / 2, 0)
-	head.Color = bodyColor
+	head.Color = shade(bodyColor, 0.82)
 	head.Material = Enum.Material.SmoothPlastic
-	head.TopSurface = Enum.SurfaceType.Smooth
-	head.BottomSurface = Enum.SurfaceType.Smooth
 	head.Parent = model
 
 	model.PrimaryPart = root
+
+	-- ===== Cosmetic detailing (welded to root; front is the root's -Z) =====
+	local sx, sy, sz = size.X, size.Y, size.Z
+	local darkColor = shade(bodyColor, 0.6)
+	local glow = TEAM_GLOW[team] or Color3.fromRGB(220, 220, 220)
+	local headCenterY = sy / 2 + headD / 2 -- matches the head's follow offset
+
+	-- Glowing eyes on the head's front face.
+	local eyeD = headD * 0.24
+	for _, sgn in ipairs({ -1, 1 }) do
+		addWelded(model, root, "Eye", CFrame.new(sgn * headD * 0.23, headCenterY + headD * 0.05, -headD * 0.42), {
+			Shape = Enum.PartType.Ball,
+			Size = Vector3.new(eyeD, eyeD, eyeD),
+			Color = glow,
+			Material = Enum.Material.Neon,
+		})
+	end
+
+	-- Team-colored crest fin on top of the head — strong team read from afar.
+	addWelded(model, root, "Crest", CFrame.new(0, headCenterY + headD * 0.55, 0), {
+		Size = Vector3.new(headD * 0.14, headD * 0.5, headD * 0.8),
+		Color = glow,
+		Material = Enum.Material.Neon,
+	})
+
+	-- Shoulder pads for a chunkier silhouette.
+	for _, sgn in ipairs({ -1, 1 }) do
+		addWelded(model, root, "Shoulder", CFrame.new(sgn * (sx * 0.58), sy * 0.28, 0), {
+			Size = Vector3.new(sx * 0.3, sy * 0.34, sz * 0.8),
+			Color = darkColor,
+		})
+	end
+
+	-- Per-class flair.
+	if typeKey == "Cannon" then
+		-- Stubby barrel jutting forward.
+		addWelded(model, root, "Barrel", CFrame.new(0, sy * 0.08, -(sz / 2 + sx * 0.35)) * CFrame.Angles(0, math.rad(90), 0), {
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(sx * 0.8, sx * 0.5, sx * 0.5),
+			Color = shade(bodyColor, 0.45),
+			Material = Enum.Material.Metal,
+		})
+	elseif typeKey == "Ranged" then
+		-- Floating focus orb in front of the chest.
+		addWelded(model, root, "Orb", CFrame.new(0, sy * 0.12, -(sz / 2 + sx * 0.32)), {
+			Shape = Enum.PartType.Ball,
+			Size = Vector3.new(sx * 0.45, sx * 0.45, sx * 0.45),
+			Color = glow,
+			Material = Enum.Material.Neon,
+		})
+	else
+		-- Melee: a pair of forward-swept horns on the head.
+		for _, sgn in ipairs({ -1, 1 }) do
+			addWelded(model, root, "Horn", CFrame.new(sgn * headD * 0.3, headCenterY + headD * 0.32, -headD * 0.18) * CFrame.Angles(math.rad(-32), 0, 0), {
+				Size = Vector3.new(headD * 0.12, headD * 0.5, headD * 0.12),
+				Color = darkColor,
+			})
+		end
+	end
 
 	-- HP billboard above the head.
 	local gui = Instance.new("BillboardGui")
@@ -148,8 +257,10 @@ local function buildPath(team)
 	return out
 end
 
-function MinionService:spawn(team, typeKey, slotIndex)
+function MinionService:spawn(team, typeKey, slotIndex, hpMult, dmgMult)
 	typeKey = typeKey or "Melee"
+	hpMult = hpMult or 1
+	dmgMult = dmgMult or 1
 	local typeData = Config.MinionTypes[typeKey]
 	assert(typeData, "Unknown minion type: " .. tostring(typeKey))
 	-- A tiny initial offset based on slot so the spawn doesn't put two minions
@@ -179,11 +290,11 @@ function MinionService:spawn(team, typeKey, slotIndex)
 		root = root,
 		hpFill = hpFill,
 		-- Per-type stats copied into the entry so a buff on this one minion
-		-- wouldn't mutate Config.
-		maxHP = typeData.MaxHP,
-		hp = typeData.MaxHP,
+		-- wouldn't mutate Config. hpMult/dmgMult apply late-game wave scaling.
+		maxHP = math.floor(typeData.MaxHP * hpMult + 0.5),
+		hp = math.floor(typeData.MaxHP * hpMult + 0.5),
 		walkSpeed = typeData.WalkSpeed,
-		attackDamage = typeData.AttackDamage,
+		attackDamage = typeData.AttackDamage * dmgMult,
 		attackRange = typeData.AttackRange,
 		attackInterval = typeData.AttackInterval,
 		aggroRadius = typeData.AggroRadius,
@@ -267,6 +378,10 @@ function MinionService:applyDamage(entry, amount, killerPlayer)
 	if not entry.alive then
 		return
 	end
+	-- Jungle monsters aggro whoever last damaged them (JungleService AI).
+	if entry.isJungle and killerPlayer then
+		entry.aggroUserId = killerPlayer.UserId
+	end
 	entry.hp = math.max(0, entry.hp - amount)
 	local pct = entry.hp / math.max(entry.maxHP, 1)
 	entry.hpFill.Size = UDim2.fromScale(math.clamp(pct, 0, 1), 1)
@@ -279,8 +394,10 @@ function MinionService:applyDamage(entry, amount, killerPlayer)
 	end
 	if entry.hp <= 0 then
 		entry.alive = false
+		local deathPos = entry.root and entry.root.Position
 		-- Practice dummies don't pay out gold — they're a training target.
-		if not entry.isDummy then
+		-- Jungle monsters have their own reward flow (JungleService).
+		if not entry.isDummy and not entry.isJungle then
 			-- Team share: every member of the enemy team gets MinionTeamGold
 			-- regardless of who landed the killing blow.
 			local enemyTeam = (entry.team == "Blue") and "Red" or "Blue"
@@ -292,6 +409,10 @@ function MinionService:applyDamage(entry, amount, killerPlayer)
 					self.matchController:addGold(killerPlayer, entry.lastHitGold)
 				end
 			end
+			-- Creep score + lane XP (last-hitter always, nearby allies share).
+			if self.scoreService then
+				self.scoreService:onMinionKilled(entry, killerPlayer, deathPos)
+			end
 		end
 		if self.combatService then
 			self.combatService:onTargetRemoved("minion", entry.id)
@@ -299,6 +420,9 @@ function MinionService:applyDamage(entry, amount, killerPlayer)
 		if entry.isDummy and self.practiceService then
 			-- Practice dummy: hand off to PracticeService for respawn timing.
 			self.practiceService:onDummyKilled(entry)
+		elseif entry.isJungle and self.jungleService then
+			-- Jungle monster: rewards (gold/XP/buff) + respawn scheduling.
+			self.jungleService:onJungleKilled(entry, killerPlayer)
 		else
 			entry.model:Destroy()
 			self.minions[entry.id] = nil
@@ -323,9 +447,9 @@ end
 local function findNearestEnemyTarget(self, entry)
 	local pos = entry.root.Position
 	local best, bestDist
-	-- Enemy minions
+	-- Enemy minions (lane minions ignore neutral jungle monsters)
 	for otherId, other in pairs(self.minions) do
-		if other.alive and other.team ~= entry.team then
+		if other.alive and other.team ~= entry.team and not other.isJungle and not other.isDummy then
 			local d = (other.root.Position - pos).Magnitude
 			if d <= entry.aggroRadius then
 				if not bestDist or d < bestDist then
@@ -532,6 +656,10 @@ function MinionService:_tick(dt)
 		if not entry.alive then
 			continue
 		end
+		-- Jungle monsters are driven by JungleService's own AI tick.
+		if entry.isJungle then
+			continue
+		end
 		-- Practice dummies don't run AI, but they react to displacement CC
 		-- (knockback / pull move them horizontally over a short window;
 		-- knockup adds a parabolic vertical offset above their floor Y).
@@ -696,16 +824,22 @@ function MinionService:startWaves()
 		return
 	end
 	self.waveTaskRunning = true
+	self.waveNumber = 0
 	task.spawn(function()
 		task.wait(Config.Wave.StartDelay)
 		while self.waveTaskRunning do
+			-- Waves scale up over the match so the game escalates toward an end.
+			self.waveNumber = self.waveNumber + 1
+			local grown = self.waveNumber - 1
+			local hpMult = math.min(1 + (Config.WaveScaling.HPPerWavePct / 100) * grown, Config.WaveScaling.MaxMult)
+			local dmgMult = math.min(1 + (Config.WaveScaling.DamagePerWavePct / 100) * grown, Config.WaveScaling.MaxMult)
 			local seq = Config.Wave.Sequence
 			for i, typeKey in ipairs(seq) do
 				if not self.waveTaskRunning then
 					return
 				end
-				self:spawn("Blue", typeKey, i)
-				self:spawn("Red", typeKey, i)
+				self:spawn("Blue", typeKey, i, hpMult, dmgMult)
+				self:spawn("Red", typeKey, i, hpMult, dmgMult)
 				if i < #seq then
 					task.wait(Config.Wave.Stagger)
 				end

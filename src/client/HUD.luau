@@ -133,6 +133,157 @@ function HUD.create(playerGui)
 	self.statusLabel = statusLabel
 	self.activeStatuses = {}
 
+	-- ===== Team score + match timer (top-center, below the tower strip) =====
+	local scoreBar = Instance.new("Frame")
+	scoreBar.Name = "ScoreBar"
+	scoreBar.AnchorPoint = Vector2.new(0.5, 0)
+	scoreBar.Position = UDim2.new(0.5, 0, 0, Responsive.topInset() + 50)
+	scoreBar.Size = UDim2.fromOffset(240, 40)
+	scoreBar.BackgroundColor3 = P.bg
+	scoreBar.BackgroundTransparency = 0.15
+	scoreBar.BorderSizePixel = 0
+	-- Sinks clicks so tapping the scoreboard toggle doesn't also click-target
+	-- something in the world behind it.
+	scoreBar.Active = true
+	scoreBar.Parent = screen
+	UIStyle.corner(scoreBar, 10)
+	UIStyle.stroke(scoreBar, { Color = Color3.fromRGB(0, 0, 0), Thickness = 1.5, Transparency = 0.4 })
+	self.scoreBar = scoreBar
+
+	self.blueScoreText = newLabel(scoreBar, "0", P.blueTeam, {
+		Size = UDim2.new(0, 60, 1, 0),
+		Position = UDim2.fromOffset(8, 0),
+		TextXAlignment = Enum.TextXAlignment.Center,
+	})
+	self.clockText = newLabel(scoreBar, "0:00", P.text, {
+		Size = UDim2.new(1, -140, 0.8, 0),
+		Position = UDim2.fromScale(0.5, 0.5),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+	})
+	self.redScoreText = newLabel(scoreBar, "0", P.redTeam, {
+		Size = UDim2.new(0, 60, 1, 0),
+		Position = UDim2.new(1, -68, 0, 0),
+		TextXAlignment = Enum.TextXAlignment.Center,
+	})
+	self.clockStart = nil
+	-- Tapping the score bar toggles the scoreboard (the touch path; PC holds Tab).
+	scoreBar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			if self._onScoreBarTap then
+				self._onScoreBarTap()
+			end
+		end
+	end)
+
+	-- ===== Kill feed (top-right, under the gold panel) =====
+	local feed = Instance.new("Frame")
+	feed.Name = "KillFeed"
+	feed.AnchorPoint = Vector2.new(1, 0)
+	feed.Position = UDim2.new(1, -16, 0, 112)
+	feed.Size = UDim2.fromOffset(250, 160)
+	feed.BackgroundTransparency = 1
+	feed.Parent = screen
+	local feedLayout = Instance.new("UIListLayout")
+	feedLayout.FillDirection = Enum.FillDirection.Vertical
+	feedLayout.Padding = UDim.new(0, 4)
+	feedLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+	feedLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	feedLayout.Parent = feed
+	self.killFeed = feed
+	self._feedOrder = 0
+
+	-- ===== Center announcement (FIRST BLOOD! / DOUBLE KILL! / objectives) =====
+	local announce = Instance.new("TextLabel")
+	announce.Name = "Announcement"
+	announce.AnchorPoint = Vector2.new(0.5, 0.5)
+	announce.Position = UDim2.fromScale(0.5, 0.28)
+	announce.Size = UDim2.fromOffset(700, 52)
+	announce.BackgroundTransparency = 1
+	announce.Font = Enum.Font.GothamBlack
+	announce.Text = ""
+	announce.TextColor3 = P.accent
+	announce.TextSize = 40
+	announce.TextStrokeTransparency = 0.2
+	announce.TextTransparency = 1
+	-- Above the death overlay (ZIndex 9) so VICTORY/kill banners read while dead.
+	announce.ZIndex = 11
+	announce.Parent = screen
+	self.announceLabel = announce
+	self._announceGen = 0
+
+	-- ===== Level badge + XP bar (attached to the HP bar) =====
+	local levelBadge = Instance.new("Frame")
+	levelBadge.AnchorPoint = Vector2.new(1, 1)
+	levelBadge.Position = UDim2.new(0.5, -166, 1, -114)
+	levelBadge.Size = UDim2.fromOffset(36, 36)
+	levelBadge.BackgroundColor3 = P.panel
+	levelBadge.BorderSizePixel = 0
+	levelBadge.Parent = screen
+	UIStyle.corner(levelBadge, 18)
+	UIStyle.stroke(levelBadge, { Color = P.accent, Thickness = 2, Transparency = 0.3 })
+	self.levelText = newLabel(levelBadge, "1", P.accent)
+	self.levelBadge = levelBadge
+
+	local xpHolder = Instance.new("Frame")
+	xpHolder.AnchorPoint = Vector2.new(0.5, 1)
+	xpHolder.Position = UDim2.new(0.5, 0, 1, -110)
+	xpHolder.Size = UDim2.fromOffset(320, 6)
+	xpHolder.BackgroundColor3 = P.bg
+	xpHolder.BorderSizePixel = 0
+	xpHolder.Parent = screen
+	UIStyle.corner(xpHolder, 3)
+	local xpFill = Instance.new("Frame")
+	xpFill.Size = UDim2.fromScale(0, 1)
+	xpFill.BackgroundColor3 = Color3.fromRGB(170, 120, 255)
+	xpFill.BorderSizePixel = 0
+	xpFill.Parent = xpHolder
+	UIStyle.corner(xpFill, 3)
+	self.xpFill = xpFill
+
+	-- ===== Death overlay (respawn countdown) =====
+	local deathOverlay = Instance.new("Frame")
+	deathOverlay.Name = "DeathOverlay"
+	deathOverlay.Size = UDim2.fromScale(1, 1)
+	deathOverlay.BackgroundColor3 = Color3.fromRGB(10, 5, 8)
+	deathOverlay.BackgroundTransparency = 0.45
+	deathOverlay.BorderSizePixel = 0
+	deathOverlay.Visible = false
+	deathOverlay.ZIndex = 9
+	deathOverlay.Active = false
+	deathOverlay.Parent = screen
+	local slainLabel = newLabel(deathOverlay, "YOU HAVE BEEN SLAIN", P.bad, {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.38),
+		Size = UDim2.fromOffset(600, 44),
+		ZIndex = 10,
+	})
+	slainLabel.Font = Enum.Font.GothamBlack
+	slainLabel.TextScaled = false
+	slainLabel.TextSize = 36
+	local slainByLabel = newLabel(deathOverlay, "", P.textDim, {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.445),
+		Size = UDim2.fromOffset(600, 24),
+		ZIndex = 10,
+	})
+	slainByLabel.TextScaled = false
+	slainByLabel.TextSize = 18
+	local respawnLabel = newLabel(deathOverlay, "", P.text, {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.54),
+		Size = UDim2.fromOffset(300, 56),
+		ZIndex = 10,
+	})
+	respawnLabel.Font = Enum.Font.GothamBlack
+	respawnLabel.TextScaled = false
+	respawnLabel.TextSize = 48
+	self.deathOverlay = deathOverlay
+	self.slainByLabel = slainByLabel
+	self.respawnLabel = respawnLabel
+	self.deathEndsAt = nil
+
 	-- ===== Gold (top-right) =====
 	local goldHolder = Instance.new("Frame")
 	goldHolder.AnchorPoint = Vector2.new(1, 0)
@@ -175,6 +326,93 @@ function HUD.create(playerGui)
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	layout.Parent = bar
 
+	-- ===== Recall (Base) + Shop buttons, just right of the ability bar =====
+	local utilHolder = Instance.new("Frame")
+	utilHolder.Name = "UtilButtons"
+	utilHolder.AnchorPoint = Vector2.new(0, 1)
+	utilHolder.Position = UDim2.new(0.5, 120, 1, -32) -- repositioned per-champion in setChampion
+	utilHolder.Size = UDim2.fromOffset(64 * 2 + 10, 64)
+	utilHolder.BackgroundTransparency = 1
+	utilHolder.Parent = screen
+	self.utilHolder = utilHolder
+	local utilLayout = Instance.new("UIListLayout")
+	utilLayout.FillDirection = Enum.FillDirection.Horizontal
+	utilLayout.Padding = UDim.new(0, 10)
+	utilLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+	utilLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	utilLayout.Parent = utilHolder
+
+	-- Frame (not TextButton) + Active=false so right-click still passes through to
+	-- the camera mouse-look, same rationale as the ability slots. We act on the
+	-- MB1 / touch press; an optional `gate` blocks the press when false.
+	local function makeUtilButton(order, title, keyHint, accent, onPress, gate)
+		local frame = Instance.new("Frame")
+		frame.LayoutOrder = order
+		frame.Size = UDim2.fromOffset(64, 64)
+		frame.BackgroundColor3 = P.panel
+		frame.BorderSizePixel = 0
+		frame.Active = false
+		frame.Parent = utilHolder
+		UIStyle.corner(frame, 12)
+		UIStyle.stroke(frame, { Color = accent, Thickness = 2, Transparency = 0.35 })
+		local titleLabel = newLabel(frame, title, accent, {
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, 10),
+			Size = UDim2.new(1, -8, 0, 22),
+		})
+		titleLabel.TextScaled = false
+		titleLabel.TextSize = 15
+		local keyChip = Instance.new("Frame")
+		keyChip.AnchorPoint = Vector2.new(0.5, 1)
+		keyChip.Position = UDim2.new(0.5, 0, 1, -6)
+		keyChip.Size = UDim2.fromOffset(40, 20)
+		keyChip.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+		keyChip.BackgroundTransparency = 0.35
+		keyChip.BorderSizePixel = 0
+		keyChip.Parent = frame
+		UIStyle.corner(keyChip, 6)
+		local kl = newLabel(keyChip, keyHint, P.text)
+		kl.TextScaled = false
+		kl.TextSize = 12
+		frame.InputBegan:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1
+				and input.UserInputType ~= Enum.UserInputType.Touch
+			then
+				return
+			end
+			if gate and not gate() then
+				return
+			end
+			onPress()
+		end)
+		return frame
+	end
+
+	makeUtilButton(1, "BASE", "B", Color3.fromRGB(140, 200, 255), function()
+		if self._onRecall then
+			self._onRecall()
+		end
+	end)
+	self.shopBtn = makeUtilButton(2, "SHOP", "P", P.accent, function()
+		if self._onShop then
+			self._onShop()
+		end
+	end, function()
+		return self._shopEnabled
+	end)
+	-- Dim overlay shown while NOT in base (shop is gated to the base zone).
+	local shopDim = Instance.new("Frame")
+	shopDim.Size = UDim2.fromScale(1, 1)
+	shopDim.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+	shopDim.BackgroundTransparency = 0.5
+	shopDim.BorderSizePixel = 0
+	shopDim.ZIndex = 5
+	shopDim.Active = false
+	shopDim.Parent = self.shopBtn
+	UIStyle.corner(shopDim, 12)
+	self.shopDim = shopDim
+	self._shopEnabled = false
+
 	RunService.RenderStepped:Connect(function()
 		self:_tick()
 	end)
@@ -186,9 +424,166 @@ function HUD.create(playerGui)
 	Responsive.start()
 	self._unsubResponsive = Responsive.onChanged(function(_class, scale)
 		self.rootScale.Scale = scale
+		self.scoreBar.Position = UDim2.new(0.5, 0, 0, Responsive.topInset() + 50)
 	end)
 
 	return self
+end
+
+-- ===== Team score + match clock =====
+
+function HUD:setTeam(team)
+	self.myTeam = team
+end
+
+function HUD:setOnScoreBarTap(fn)
+	self._onScoreBarTap = fn
+end
+
+function HUD:setTeamScore(score)
+	self.blueScoreText.Text = tostring(score.Blue or 0)
+	self.redScoreText.Text = tostring(score.Red or 0)
+end
+
+-- `serverStartTime` is workspace:GetServerTimeNow()-based (or nil to hide).
+function HUD:setMatchClock(serverStartTime)
+	self.clockStart = serverStartTime
+	if not serverStartTime then
+		self.clockText.Text = "0:00"
+	end
+end
+
+-- ===== Kill feed =====
+
+local TEAM_HEX = {
+	Blue = "#64B4FF",
+	Red = "#FF6E6E",
+}
+
+-- Display names go into RichText markup — escape the markup characters.
+local function escapeRich(s)
+	s = tostring(s or "?")
+	s = string.gsub(s, "&", "&amp;")
+	s = string.gsub(s, "<", "&lt;")
+	s = string.gsub(s, ">", "&gt;")
+	return s
+end
+
+function HUD:addKillFeed(info)
+	local killerHex = TEAM_HEX[info.killerTeam] or "#CCCCCC"
+	local victimHex = TEAM_HEX[info.victimTeam] or "#CCCCCC"
+	local text
+	if info.killerName then
+		text = ('<font color="%s">%s</font>  ⚔  <font color="%s">%s</font>'):format(
+			killerHex, escapeRich(info.killerName), victimHex, escapeRich(info.victimName)
+		)
+	else
+		text = ('<font color="%s">%s</font> was executed'):format(victimHex, escapeRich(info.victimName))
+	end
+
+	local row = Instance.new("TextLabel")
+	row.Size = UDim2.new(1, 0, 0, 24)
+	row.BackgroundColor3 = P.bg
+	row.BackgroundTransparency = 0.25
+	row.BorderSizePixel = 0
+	row.RichText = true
+	row.Text = text
+	row.TextColor3 = P.text
+	row.Font = UIStyle.Font
+	row.TextSize = 14
+	row.TextXAlignment = Enum.TextXAlignment.Center
+	self._feedOrder = self._feedOrder + 1
+	row.LayoutOrder = self._feedOrder
+	row.Parent = self.killFeed
+	UIStyle.corner(row, 6)
+
+	-- Cap the visible rows, oldest out first.
+	local rows = {}
+	for _, child in ipairs(self.killFeed:GetChildren()) do
+		if child:IsA("TextLabel") then
+			table.insert(rows, child)
+		end
+	end
+	table.sort(rows, function(a, b)
+		return a.LayoutOrder < b.LayoutOrder
+	end)
+	for i = 1, #rows - 5 do
+		rows[i]:Destroy()
+	end
+
+	task.delay(8, function()
+		if row.Parent then
+			TweenService:Create(row, TweenInfo.new(0.4), { BackgroundTransparency = 1, TextTransparency = 1 }):Play()
+			task.wait(0.4)
+			if row.Parent then
+				row:Destroy()
+			end
+		end
+	end)
+end
+
+-- ===== Center announcements =====
+
+function HUD:announce(text, color, duration)
+	duration = duration or 2.5
+	self._announceGen = self._announceGen + 1
+	local gen = self._announceGen
+	local label = self.announceLabel
+	label.Text = text
+	label.TextColor3 = color or P.accent
+	label.TextTransparency = 0
+	label.TextStrokeTransparency = 0.2
+	-- Pop-in scale effect via text size.
+	label.TextSize = 52
+	TweenService:Create(label, TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		TextSize = 40,
+	}):Play()
+	task.delay(duration, function()
+		if self._announceGen ~= gen then
+			return
+		end
+		TweenService:Create(label, TweenInfo.new(0.5), {
+			TextTransparency = 1,
+			TextStrokeTransparency = 1,
+		}):Play()
+	end)
+end
+
+-- ===== Level / XP =====
+
+function HUD:setXP(level, xp, xpToNext)
+	self.levelText.Text = tostring(level)
+	if xpToNext and xpToNext > 0 then
+		self.xpFill.Size = UDim2.fromScale(math.clamp(xp / xpToNext, 0, 1), 1)
+	else
+		self.xpFill.Size = UDim2.fromScale(1, 1) -- max level
+	end
+end
+
+-- Quick golden flash on the badge when we level up.
+function HUD:flashLevelUp()
+	local stroke = self.levelBadge:FindFirstChildOfClass("UIStroke")
+	if stroke then
+		stroke.Transparency = 0
+		stroke.Thickness = 4
+		TweenService:Create(stroke, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Transparency = 0.3,
+			Thickness = 2,
+		}):Play()
+	end
+end
+
+-- ===== Death overlay =====
+
+function HUD:showDeath(respawnSeconds, killerName)
+	self.deathEndsAt = os.clock() + (respawnSeconds or 5)
+	self.slainByLabel.Text = killerName and ("Slain by " .. killerName) or ""
+	self.deathOverlay.Visible = true
+end
+
+function HUD:hideDeath()
+	self.deathEndsAt = nil
+	self.deathOverlay.Visible = false
 end
 
 function HUD:setChampion(championKey)
@@ -212,7 +607,12 @@ function HUD:setChampion(championKey)
 	end
 	local slotSize = 72
 	local pad = 10
-	self.bar.Size = UDim2.fromOffset(slotSize * slotsCount + pad * math.max(slotsCount - 1, 0), slotSize + 12)
+	local barWidth = slotSize * slotsCount + pad * math.max(slotsCount - 1, 0)
+	self.bar.Size = UDim2.fromOffset(barWidth, slotSize + 12)
+	-- Park the recall/shop buttons just past the bar's right edge.
+	if self.utilHolder then
+		self.utilHolder.Position = UDim2.new(0.5, barWidth / 2 + 12, 1, -32)
+	end
 
 	for i, slot in ipairs(Champions.SlotOrder) do
 		local ability = champ.Abilities[slot]
@@ -350,6 +750,23 @@ function HUD:setOnAimEnd(fn)
 	self._onAimEnd = fn
 end
 
+function HUD:setOnRecall(fn)
+	self._onRecall = fn
+end
+
+function HUD:setOnShop(fn)
+	self._onShop = fn
+end
+
+-- Enable/disable the shop button (and toggle its dimmed look). Driven by the
+-- InBaseChanged remote — you can only shop while standing in your base.
+function HUD:setShopEnabled(enabled)
+	self._shopEnabled = enabled and true or false
+	if self.shopDim then
+		self.shopDim.Visible = not self._shopEnabled
+	end
+end
+
 function HUD:setHP(hp, maxHP)
 	self.maxHP = maxHP
 	local pct = math.clamp(hp / math.max(maxHP, 1), 0, 1)
@@ -435,10 +852,12 @@ function HUD:_tick()
 			rec.text.Text = ""
 		end
 	end
+	-- Show the SOONEST-expiring status so a 1s stun isn't hidden behind a
+	-- 75-second jungle buff.
 	local active, soonest
 	for k, s in pairs(self.activeStatuses) do
 		if s.expiresAt > now then
-			if not soonest or s.expiresAt > soonest then
+			if not soonest or s.expiresAt < soonest then
 				soonest = s.expiresAt
 				active = k
 			end
@@ -451,6 +870,24 @@ function HUD:_tick()
 		self.statusLabel.Text = string.upper(active) .. string.format("  %.1fs", soonest - now)
 	else
 		self.statusLabel.Visible = false
+	end
+
+	-- Match clock (server-time based so every client agrees).
+	if self.clockStart then
+		local elapsed = math.max(0, workspace:GetServerTimeNow() - self.clockStart)
+		local m = math.floor(elapsed / 60)
+		local s = math.floor(elapsed % 60)
+		self.clockText.Text = string.format("%d:%02d", m, s)
+	end
+
+	-- Death overlay countdown.
+	if self.deathEndsAt then
+		local remaining = self.deathEndsAt - now
+		if remaining <= 0 then
+			self:hideDeath()
+		else
+			self.respawnLabel.Text = string.format("%d", math.ceil(remaining))
+		end
 	end
 end
 

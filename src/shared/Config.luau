@@ -137,6 +137,78 @@ Config.Minion = {
 	WaypointReachDistance = 3,
 }
 
+-- Waves grow stronger over the match so games escalate and end. Multipliers
+-- apply to minion HP and damage per wave beyond the first, capped.
+Config.WaveScaling = {
+	HPPerWavePct = 5,
+	DamagePerWavePct = 4,
+	MaxMult = 2.5,
+}
+
+-- =====================================================================
+-- JUNGLE — each camp pad (Config.JungleCamps) hosts one neutral brute.
+-- Killing it pays gold + XP and grants the killer a timed buff:
+--   North camps → STORM  (move + attack speed)
+--   South camps → MIGHT  (attack power + ability power)
+-- =====================================================================
+Config.Jungle = {
+	RespawnDelay = 75,
+	-- A brute that chases beyond this distance from its pad resets home
+	-- and rapidly heals to full.
+	LeashRange = 45,
+	Creep = {
+		MaxHP = 900,
+		WalkSpeed = 13,
+		AttackDamage = 25,
+		AttackRange = 9,
+		AttackInterval = 1.2,
+		Gold = 60,
+		XP = 80,
+	},
+	Buffs = {
+		Storm = {
+			Label = "storm",
+			Duration = 75,
+			Stats = { MoveSpeedPct = 15, AttackSpeedPct = 20 },
+			Color = Color3.fromRGB(120, 220, 255),
+		},
+		Might = {
+			Label = "might",
+			Duration = 75,
+			Stats = { AttackPower = 15, AbilityPowerPct = 15 },
+			Color = Color3.fromRGB(255, 120, 90),
+		},
+	},
+}
+
+-- =====================================================================
+-- BOSS ("the Overlord") — single neutral boss in the north-jungle pit.
+-- Slaying it grants the whole killing team gold, XP, and a strong timed
+-- buff. Spawns a few minutes in; respawns a while after each kill.
+-- =====================================================================
+Config.Boss = {
+	SpawnDelay = 180,
+	RespawnDelay = 240,
+	MaxHP = 3500,
+	WalkSpeed = 10,
+	AttackDamage = 50,
+	AttackRange = 11,
+	AttackInterval = 1.6,
+	-- Periodic ground slam while in combat: damages every enemy in radius.
+	SlamInterval = 5,
+	SlamRadius = 14,
+	SlamDamage = 70,
+	LeashRange = 55,
+	GoldEach = 150,
+	XPEach = 150,
+	Buff = {
+		Label = "overlord",
+		Duration = 90,
+		Stats = { AttackPower = 20, AbilityPowerPct = 20, MoveSpeedPct = 8 },
+		Color = Color3.fromRGB(200, 120, 255),
+	},
+}
+
 -- =====================================================================
 -- COMBAT (champion auto-attacks)
 -- =====================================================================
@@ -148,6 +220,70 @@ Config.AutoAttack = {
 }
 
 Config.RespawnDelay = 6
+
+-- Death timers grow with match time (League-style) so late-game deaths hurt
+-- more. Actual delay = RespawnDelay + PerMinute × minutes-elapsed, capped.
+Config.Respawn = {
+	PerMinute = 1.5,
+	Max = 24,
+}
+
+-- =====================================================================
+-- KILL REWARDS — champion takedowns pay gold to the killer and assists.
+-- A victim on a killing spree is worth a shutdown bonus. All windows in
+-- seconds.
+-- =====================================================================
+Config.Kill = {
+	Gold = 300,
+	AssistGold = 150,
+	FirstBloodBonus = 100,
+	-- Shutdown: extra gold per kill the victim had on their spree (3+ spree).
+	ShutdownPerStreak = 75,
+	ShutdownMax = 450,
+	-- Damaging a champion within this window before their death = assist.
+	AssistWindow = 10,
+	-- Consecutive kills inside this window chain into DOUBLE/TRIPLE/... kills.
+	MultikillWindow = 10,
+}
+
+-- =====================================================================
+-- XP / LEVELING — champions level up during a match, gaining max HP and
+-- damage. XP comes from nearby minion deaths, takedowns, towers, jungle.
+-- =====================================================================
+Config.XP = {
+	-- Minion XP is shared with every enemy-team champion within this radius
+	-- of the dying minion (the last-hitter always gets it, distance or not).
+	ShareRadius = 70,
+	Minion = { Melee = 32, Ranged = 26, Cannon = 60 },
+	ChampionKillBase = 120,
+	ChampionKillPerLevel = 20,
+	-- Assists earn this % of the kill XP.
+	AssistXPPct = 60,
+	-- Every member of the team that destroys a tower gets this.
+	Tower = 90,
+}
+
+Config.Leveling = {
+	MaxLevel = 15,
+	-- Per level beyond 1: max HP × (1 + pct/100 × (level-1)), same for damage.
+	HPPerLevelPct = 7,
+	DamagePerLevelPct = 4,
+	-- XP needed to go from level N to N+1 = XPBase + XPGrowth × (N-1).
+	XPBase = 150,
+	XPGrowth = 60,
+}
+
+function Config.xpToNext(level)
+	return Config.Leveling.XPBase + Config.Leveling.XPGrowth * (level - 1)
+end
+
+function Config.levelHPMult(level)
+	return 1 + (Config.Leveling.HPPerLevelPct / 100) * ((level or 1) - 1)
+end
+
+function Config.levelDamageMult(level)
+	return 1 + (Config.Leveling.DamagePerLevelPct / 100) * ((level or 1) - 1)
+end
 
 -- =====================================================================
 -- RECALL ("Base") — channeled teleport back to your team's spawn pad.
@@ -177,6 +313,9 @@ Config.Tower = {
 	DefaultInterval = 1.5,
 	DefaultMaxHP = 1500,
 	DefaultGoldReward = 200,
+	-- On top of the killer's reward, every member of the destroying team gets
+	-- this (League-style global tower gold).
+	TeamGoldReward = 100,
 	-- League-style backdoor protection: when a CHAMPION attacks a tower with no
 	-- attacker-team minions in tower range, damage is multiplied by this.
 	BackdoorDamageMult = 0.20,

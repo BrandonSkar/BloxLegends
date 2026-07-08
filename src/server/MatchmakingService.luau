@@ -13,9 +13,13 @@ local STATE_LOBBY = "lobby"
 local STATE_IN_ZONE = "in_zone"
 local STATE_IN_MATCH = "in_match"
 
-function MatchmakingService.new(lobby)
+function MatchmakingService.new(lobby, opts)
 	local self = setmetatable({}, MatchmakingService)
 	self.lobby = lobby -- { spawnPos, zones = {[id]={pad, statusLabel,...}} }
+	-- Delegated mode (lobby server): matches don't run here — when a group is
+	-- paired we teleport it to a reserved server (see onMatchStart). So we never
+	-- hold matchInProgress and we drain ALL formable matches each timer tick.
+	self.delegated = opts and opts.delegated or false
 	self.zones = {} -- zoneId -> { id, players = {userId, ...}, accessMode, ownerId, status = "open"|"ready"|"in_match" }
 	self.playerStates = {} -- userId -> { state, zoneId }
 	for id in pairs(lobby.zones) do
@@ -261,6 +265,24 @@ function MatchmakingService:_tickLobbyTimer()
 		self:_resetLobbyTimer()
 		return
 	end
+	-- Delegated (lobby server): matches run on reserved servers, so there's no
+	-- single-match gate — drain every match we can form this tick.
+	if self.delegated then
+		while true do
+			local blue, red, used = self:_findMatch()
+			if not blue then
+				break
+			end
+			self:_startMatchWith(blue, red, used)
+		end
+		if self:_anyZoneOccupied() then
+			self:_resetLobbyTimer()
+		else
+			self.lobbyTimer.active = false
+			self:_broadcastLobbyTimer()
+		end
+		return
+	end
 	if self.matchInProgress then
 		-- Wait until current match ends before pairing the next one.
 		self:_resetLobbyTimer()
@@ -433,16 +455,17 @@ end
 -- Set up a match with the given player rosters. Zones used are emptied and
 -- reopened; leftover players stay in their zones and the timer is restarted.
 function MatchmakingService:_startMatchWith(blueIds, redIds, usedZoneIds)
-	if self.matchInProgress then
+	if not self.delegated and self.matchInProgress then
 		return false
 	end
 	if #blueIds == 0 or #redIds == 0 then
 		return false
 	end
-	self.matchInProgress = true
-	self.matchTeams = { Blue = {}, Red = {} }
+	-- Capture team lists locally so the deferred onMatchStart closure binds to
+	-- THIS match (delegated mode can form several matches in one tick).
+	local teamsOut = { Blue = {}, Red = {} }
 	for _, uid in ipairs(blueIds) do
-		table.insert(self.matchTeams.Blue, uid)
+		table.insert(teamsOut.Blue, uid)
 		local p = Players:GetPlayerByUserId(uid)
 		if p then
 			self:_setPlayerState(p, STATE_IN_MATCH, nil)
@@ -450,12 +473,18 @@ function MatchmakingService:_startMatchWith(blueIds, redIds, usedZoneIds)
 		end
 	end
 	for _, uid in ipairs(redIds) do
-		table.insert(self.matchTeams.Red, uid)
+		table.insert(teamsOut.Red, uid)
 		local p = Players:GetPlayerByUserId(uid)
 		if p then
 			self:_setPlayerState(p, STATE_IN_MATCH, nil)
 			Remotes.get("MatchStarted"):FireClient(p, "Red")
 		end
+	end
+	-- Only this server tracks the live match when it runs locally; the lobby
+	-- server delegates the match to a reserved server and stays free to pair more.
+	if not self.delegated then
+		self.matchInProgress = true
+		self.matchTeams = teamsOut
 	end
 	-- Clear the zones that contributed to this match (their players are leaving the lobby).
 	for _, zoneId in ipairs(usedZoneIds or {}) do
@@ -473,7 +502,7 @@ function MatchmakingService:_startMatchWith(blueIds, redIds, usedZoneIds)
 	self:_pushZoneUpdate()
 	task.delay(Config.Matchmaking.StartCountdown, function()
 		if self.callbacks.onMatchStart then
-			self.callbacks.onMatchStart(self.matchTeams.Blue, self.matchTeams.Red)
+			self.callbacks.onMatchStart(teamsOut.Blue, teamsOut.Red)
 		end
 	end)
 	-- Leftover players: their zones still have populations. Restart timer for them.
@@ -540,10 +569,32 @@ function MatchmakingService:_startMatchFromAllZones()
 	return true
 end
 
--- Public testing path: ignore the timer, ignore matchmaking rules, start
--- immediately. If the calling player is just standing in the lobby (not in any
--- zone), they get added to Blue solo. Otherwise zones split into teams by id.
+-- "Start Now": skip the remaining lobby timer.
+--
+-- Production (delegated lobby server): only starts a match the normal FIFO
+-- matchmaker could already form from zone groups — one player can never yank
+-- strangers into a lopsided match; everyone involved opted in by standing in
+-- a zone. If no legal pairing exists yet, nothing happens.
+--
+-- Studio (local server): keeps the permissive test path — auto-join the
+-- caller to an empty zone and pull every occupied zone into one match.
 function MatchmakingService:startNow(player)
+	if self.delegated then
+		if player and self:getState(player) ~= STATE_IN_ZONE then
+			return false
+		end
+		local blueIds, redIds, usedZones = self:_findMatch()
+		if not blueIds then
+			return false
+		end
+		local ok = self:_startMatchWith(blueIds, redIds, usedZones)
+		if ok and self.lobbyTimer and self.lobbyTimer.active and not self:_anyZoneOccupied() then
+			self.lobbyTimer.active = false
+			self:_broadcastLobbyTimer()
+		end
+		return ok
+	end
+
 	if self.matchInProgress then
 		return false
 	end

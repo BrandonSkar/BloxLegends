@@ -28,6 +28,24 @@ local ZONE_COLORS = {
 	Color3.fromRGB(220, 150, 90),
 }
 
+-- ===== Zone-pad row layout =====
+-- The zone pads sit in a straight row (left → right along X), evenly spaced
+-- with a small gap, centered on the lobby origin's X and pushed out ROW_Z in
+-- front so the row stays clear of the central shop kiosk. Both the procedural
+-- builder and the baked-lobby reuse path place pads here so the arrangement is
+-- identical either way.
+local PAD_SIZE = 18
+local PAD_GAP = 6 -- studs of empty space between adjacent pads
+local ROW_Z = 40 -- how far in front of the shop the row sits
+
+-- Pad-center position (at the origin's floor height) for zone `id` in a row of
+-- `count` pads. id=1 is the far-left pad, id=count the far-right.
+local function rowPadPosition(origin, id, count)
+	local spacing = PAD_SIZE + PAD_GAP
+	local xOffset = (id - 1 - (count - 1) / 2) * spacing
+	return origin + Vector3.new(xOffset, 0, ROW_Z)
+end
+
 -- Build a ring of 4 translucent ForceField walls around a zone pad so players
 -- can't walk into the zone — they have to use the proximity prompt to join.
 -- Idempotent: removes any existing ZoneWalls folder and rebuilds.
@@ -66,6 +84,39 @@ local function buildZoneWalls(pad)
 	makeWall("West", Vector3.new(wallThickness, wallHeight, hz * 2), Vector3.new(-hx, 0, 0))
 end
 
+-- Perimeter walls around the whole lobby floor (200×200, centered on origin) so
+-- players can't walk off the edge. Idempotent — rebuilds the LobbyWalls folder,
+-- so it applies whether the lobby is freshly built or reused from the place.
+local LOBBY_HALF = 100
+local function buildLobbyWalls(lobby, origin)
+	local existing = lobby:FindFirstChild("LobbyWalls")
+	if existing then
+		existing:Destroy()
+	end
+	local folder = Instance.new("Folder")
+	folder.Name = "LobbyWalls"
+	folder.Parent = lobby
+	local h = LOBBY_HALF
+	local height = 20
+	local t = 2 -- wall thickness
+	local walls = {
+		{ size = Vector3.new(h * 2 + t * 2, height, t), pos = Vector3.new(0, height / 2, h) },
+		{ size = Vector3.new(h * 2 + t * 2, height, t), pos = Vector3.new(0, height / 2, -h) },
+		{ size = Vector3.new(t, height, h * 2), pos = Vector3.new(h, height / 2, 0) },
+		{ size = Vector3.new(t, height, h * 2), pos = Vector3.new(-h, height / 2, 0) },
+	}
+	for _, w in ipairs(walls) do
+		makePart(folder, "Wall", {
+			Size = w.size,
+			Position = origin + w.pos,
+			Color = Color3.fromRGB(70, 75, 95),
+			Material = Enum.Material.ForceField,
+			Transparency = 0.4,
+			CanQuery = false,
+		})
+	end
+end
+
 -- Locate references inside an existing Workspace.Lobby (hand-edited in Studio
 -- or baked from a previous build). Returns the same shape as build() so the
 -- rest of the server doesn't care which path was taken.
@@ -78,6 +129,12 @@ local function findReferences(existing)
 		if child:IsA("BasePart") then
 			local zoneId = child:GetAttribute("ZoneId")
 			if typeof(zoneId) == "number" then
+				-- Force the baked pad into the straight-row layout so a lobby baked
+				-- with the old ring arrangement still lines up. Only X/Z move (keep
+				-- the pad's baked height); the billboard is adornee'd so it follows,
+				-- and the walls are rebuilt below around the new position.
+				local pos = rowPadPosition(origin, zoneId, Config.Matchmaking.ZoneCount)
+				child.Position = Vector3.new(pos.X, child.Position.Y, pos.Z)
 				local statusLabel
 				local gui = child:FindFirstChildOfClass("BillboardGui")
 				if gui then
@@ -94,6 +151,7 @@ local function findReferences(existing)
 			end
 		end
 	end
+	buildLobbyWalls(existing, origin)
 	return {
 		spawnPos = origin,
 		shopKiosk = shopBase,
@@ -122,6 +180,9 @@ function LobbyBuilder.build()
 		Color = Color3.fromRGB(60, 60, 70),
 		Material = Enum.Material.SmoothPlastic,
 	})
+
+	-- Perimeter walls so players can't walk off the lobby floor.
+	buildLobbyWalls(lobby, origin)
 
 	-- Shop kiosk in the middle
 	local shopBase = makePart(lobby, "ShopKiosk", {
@@ -160,17 +221,15 @@ function LobbyBuilder.build()
 	local spawnY = origin.Y
 	local spawnPos = origin + Vector3.new(0, 0, 0)
 
-	-- Zones around the ring
+	-- Zones in a straight row — positions come from rowPadPosition (see above).
 	local zones = {}
 	local zoneCount = Config.Matchmaking.ZoneCount
-	local radius = Config.LobbyRadius
 	for i = 1, zoneCount do
-		local angle = (i - 1) * (math.pi * 2 / zoneCount)
-		local zonePos = origin + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+		local zonePos = rowPadPosition(origin, i, zoneCount)
 		local color = ZONE_COLORS[((i - 1) % #ZONE_COLORS) + 1]
 
 		local pad = makePart(lobby, "Zone" .. i, {
-			Size = Vector3.new(18, 0.5, 18),
+			Size = Vector3.new(PAD_SIZE, 0.5, PAD_SIZE),
 			Position = zonePos - Vector3.new(0, 0.25, 0),
 			Color = color,
 			Material = Enum.Material.Neon, -- only "glow" in the lobby — looks like a portal

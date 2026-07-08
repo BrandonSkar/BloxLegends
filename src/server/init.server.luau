@@ -1,10 +1,12 @@
 local Players = game:GetService("Players")
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local Champions = require(Shared:WaitForChild("Champions"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
+local ServerRole = require(Shared:WaitForChild("ServerRole"))
 
 local ArenaBuilder = require(script:WaitForChild("ArenaBuilder"))
 local LobbyBuilder = require(script:WaitForChild("LobbyBuilder"))
@@ -18,6 +20,21 @@ local AbilityHandler = require(script:WaitForChild("AbilityHandler"))
 local RecallService = require(script:WaitForChild("RecallService"))
 local PlayerDataService = require(script:WaitForChild("PlayerDataService"))
 local MatchmakingService = require(script:WaitForChild("MatchmakingService"))
+local ShopService = require(script:WaitForChild("ShopService"))
+local ScoreService = require(script:WaitForChild("ScoreService"))
+local JungleService = require(script:WaitForChild("JungleService"))
+local MatchTeleport = require(script:WaitForChild("MatchTeleport"))
+
+-- =====================================================================
+-- Server role (see ServerRole.luau). One place runs as the lobby, as a
+-- reserved match instance, or — in Studio — as an all-in-one local server.
+-- =====================================================================
+local ROLE = ServerRole.get()
+local IS_LOCAL = ROLE == "local"
+local IS_LOBBY = ROLE == "lobby"
+local IS_MATCH = ROLE == "match"
+local RUN_COMBAT = IS_LOCAL or IS_MATCH -- build the arena + tick combat loops
+local RUN_LOBBY = IS_LOCAL or IS_LOBBY -- build the lobby + run matchmaking zones
 
 Remotes.init()
 
@@ -62,9 +79,17 @@ do
 	end
 end
 
-ArenaBuilder.build()
-local lobby = LobbyBuilder.build()
-PracticeBuilder.build()
+-- Only servers that actually run a match build the arena. The lobby server
+-- skips it; a reserved match server skips the lobby. Studio builds everything.
+if RUN_COMBAT then
+	ArenaBuilder.build()
+end
+local lobby = RUN_LOBBY and LobbyBuilder.build() or { zones = {} }
+-- The practice room exists wherever there's a lobby (Studio + production
+-- lobby servers) so queueing players always have something to do.
+if RUN_LOBBY then
+	PracticeBuilder.build()
+end
 
 local matchController = MatchController.new()
 local playerData = PlayerDataService.new()
@@ -74,12 +99,21 @@ combatService:setMinionService(minionService)
 local towerService = TowerService.new(matchController, combatService, minionService)
 combatService:setTowerService(towerService)
 minionService:setTowerService(towerService)
+-- Score: kills/assists/gold/XP payouts, kill feed, match clock, scoreboard.
+local scoreService = ScoreService.new(matchController, combatService)
+combatService:setScoreService(scoreService)
+minionService:setScoreService(scoreService)
+towerService:setScoreService(scoreService)
+matchController.scoreService = scoreService
+-- Jungle: neutral buff camps + the Overlord boss (arena servers only).
+local jungleService = JungleService.new(minionService, combatService, matchController, scoreService)
+minionService:setJungleService(jungleService)
 local practiceService = PracticeService.new(minionService)
 minionService:setPracticeService(practiceService)
 local abilityHandler = AbilityHandler.new(combatService, minionService, matchController)
 abilityHandler:setTowerService(towerService)
 abilityHandler.playerData = playerData
-local matchmaking = MatchmakingService.new(lobby)
+local matchmaking = MatchmakingService.new(lobby, { delegated = IS_LOBBY })
 towerService.onNexusDestroyed = function(winningTeam)
 	matchmaking:endMatch(winningTeam .. " wins — Nexus destroyed!")
 end
@@ -88,10 +122,19 @@ local recallService = RecallService.new(matchController, combatService, matchmak
 combatService:setRecallService(recallService)
 abilityHandler:setRecallService(recallService)
 
+-- In-match item shop (spends match gold, gated to the base regen zone).
+local shopService = ShopService.new(combatService, matchController, recallService)
+
+-- Combat / minion / recall loops tick everywhere (cheap when nothing is
+-- registered) so the practice room works on lobby servers too. Towers and
+-- jungle only exist where the arena does.
 combatService:start()
 minionService:start()
-towerService:start()
 recallService:start()
+if RUN_COMBAT then
+	towerService:start()
+	jungleService:start()
+end
 
 -- =====================================================================
 -- Spawn flows: lobby vs match
@@ -207,6 +250,9 @@ local function spawnInMatch(player, team)
 		entry.target = nil
 		entry.selectingChampion = true -- locks movement + ability casts
 	end
+	-- Fresh item loadout + re-sync the shop's in-base gate for the new match.
+	shopService:resetPlayer(player)
+	recallService:clearInBaseState(player)
 
 	-- Per-body setup: builds the character, tags it, attaches the Died handler.
 	-- Recursively called from inside the Died handler so every respawned body
@@ -232,7 +278,8 @@ local function spawnInMatch(player, team)
 			end
 		end
 
-		-- Nameplate
+		-- Nameplate (shows current champion level; CombatService updates the
+		-- text on level-up).
 		local head = char:FindFirstChild("Head")
 		if head then
 			local old = head:FindFirstChild("TeamTag")
@@ -250,7 +297,8 @@ local function spawnInMatch(player, team)
 			label.BackgroundColor3 = teamData.Color
 			label.BackgroundTransparency = 0.3
 			label.BorderSizePixel = 0
-			label.Text = player.DisplayName
+			local curEntry = combatService:getEntry(player)
+			label.Text = ("[%d] %s"):format((curEntry and curEntry.level) or 1, player.DisplayName)
 			label.Font = Enum.Font.GothamBold
 			label.TextScaled = true
 			label.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -268,7 +316,10 @@ local function spawnInMatch(player, team)
 		end
 
 		humanoid.Died:Connect(function()
-			task.wait(Config.RespawnDelay)
+			-- Death timers scale with match time; CombatService stamps the
+			-- entry at the moment of death.
+			local eAtDeath = combatService:getEntry(player)
+			task.wait((eAtDeath and eAtDeath.respawnDelay) or Config.RespawnDelay)
 			if player.Parent and matchmaking:getState(player) == "in_match" then
 				local e = combatService:getEntry(player)
 				if e then
@@ -316,7 +367,13 @@ local function spawnInPractice(player)
 		entry.hp = maxHP
 		entry.target = nil
 		entry.selectingChampion = true
+		-- Changes the recall destination + keeps the shop always available.
+		entry.practiceMode = true
 	end
+	shopService:resetPlayer(player)
+	recallService:clearInBaseState(player)
+	-- A pile of practice gold so builds can be tested against the dummy.
+	matchController:addGold(player, 10000)
 
 	local spawnPos = PracticeBuilder.getSpawnPos()
 	local function spawnBody()
@@ -337,7 +394,8 @@ local function spawnInPractice(player)
 		end
 
 		humanoid.Died:Connect(function()
-			task.wait(Config.RespawnDelay)
+			local eAtDeath = combatService:getEntry(player)
+			task.wait((eAtDeath and eAtDeath.respawnDelay) or Config.RespawnDelay)
 			if player.Parent and matchmaking:getState(player) == "in_match" then
 				local e = combatService:getEntry(player)
 				if e then
@@ -359,13 +417,17 @@ local function spawnInPractice(player)
 	broadcastTeamPicksTo(player)
 end
 
-Remotes.get("StartPractice").OnServerEvent:Connect(function(player)
-	-- Only allow from the lobby — anyone in a zone or already in a match is ignored.
-	if matchmaking:getState(player) ~= "lobby" then
-		return
-	end
-	spawnInPractice(player)
-end)
+-- Practice runs wherever the lobby does (Studio + production lobby servers) —
+-- the room lives far above the world and the combat loops tick everywhere.
+if RUN_LOBBY then
+	Remotes.get("StartPractice").OnServerEvent:Connect(function(player)
+		-- Only allow from the lobby — anyone in a zone or already in a match is ignored.
+		if matchmaking:getState(player) ~= "lobby" then
+			return
+		end
+		spawnInPractice(player)
+	end)
+end
 
 -- ===== Per-team champion-pick tracking (uniqueness within a team) =====
 -- championPicks[team][championKey] = pickerUserId. Cleared on match end / on
@@ -443,16 +505,16 @@ Remotes.get("SelectChampion").OnServerEvent:Connect(function(player, championKey
 		end
 		championPicks[team][championKey] = player.UserId
 	end
-	local champ = Champions.Roster[championKey]
-	local bonuses = entry.bonuses or { MoveSpeedPct = 0 }
-	local maxHP = champ.MaxHP
-	local walkSpeed = champ.WalkSpeed * (1 + bonuses.MoveSpeedPct / 100)
 	entry.championKey = championKey
-	entry.maxHP = maxHP
-	entry.hp = maxHP
-	entry.baseSpeed = walkSpeed
 	entry.selectingChampion = false
+	-- One formula for max HP / walk speed (champion × level × items × runes),
+	-- then start the match at full health.
+	combatService:recomputeDerived(player)
+	entry.hp = entry.maxHP
 	combatService:replicateHP(player)
+	scoreService:setChampion(player, championKey)
+	-- Prime the client's XP bar (level 1, 0 XP).
+	Remotes.get("XPChanged"):FireClient(player, entry.level, entry.xp, Config.xpToNext(entry.level))
 	Remotes.get("ChampionSelected"):FireClient(player, championKey)
 	-- Tell teammates the picks list grew.
 	if team then
@@ -461,12 +523,134 @@ Remotes.get("SelectChampion").OnServerEvent:Connect(function(player, championKey
 end)
 
 -- =====================================================================
+-- Reserved match server: arrivals + match kickoff.
+-- Players are teleported in from a lobby server carrying { teams, loadouts }
+-- in their join data. We spawn each into champion-select as they arrive, and
+-- start towers/minion waves once the whole expected roster is present (or a
+-- short grace timeout elapses, so one missing player can't stall the match).
+-- =====================================================================
+local MATCH_FILL_TIMEOUT = 12 -- seconds to wait for stragglers before kicking off
+local MATCH_END_RETURN_DELAY = 5 -- seconds to show the end screen before teleporting home
+local matchExpected -- { [userId] = "Blue"/"Red" } captured from the first arrival
+local matchArrived = {} -- [userId] = true
+local matchBegun = false
+
+local function beginMatch()
+	if matchBegun or not matchExpected then
+		return
+	end
+	matchBegun = true
+	local blue, red = {}, {}
+	for uid, team in pairs(matchExpected) do
+		if team == "Red" then
+			table.insert(red, uid)
+		else
+			table.insert(blue, uid)
+		end
+	end
+	-- Hand the roster to MatchmakingService so its abandon check (_checkMatchEnd)
+	-- and endMatch broadcast work just like a locally-run match.
+	matchmaking.matchInProgress = true
+	matchmaking.matchTeams = { Blue = blue, Red = red }
+	minionService:clearAll()
+	towerService:initTowers()
+	minionService:startWaves()
+	jungleService:startSpawns()
+	-- Start the match clock + push initial score/stats to everyone.
+	scoreService:onMatchBegin()
+end
+
+local function handleMatchArrival(player)
+	local jd = player:GetJoinData()
+	local td = jd and jd.TeleportData
+	local teams = td and td.teams
+	local team = teams and teams[tostring(player.UserId)]
+	if not team then
+		-- Stray joiner on a reserved server with no match assignment — send home.
+		matchmaking:_setPlayerState(player, "lobby", nil)
+		MatchTeleport.sendToLobby({ player })
+		return
+	end
+	if not matchExpected then
+		matchExpected = {}
+		for k, v in pairs(teams) do
+			matchExpected[tonumber(k)] = v
+		end
+		-- Kick off even if someone never arrives.
+		task.delay(MATCH_FILL_TIMEOUT, beginMatch)
+	end
+	-- Restore the loadout carried from the lobby. With no DataStore, this is the
+	-- only source of this player's runes / summoner spell on this server.
+	local lo = td.loadouts and td.loadouts[tostring(player.UserId)]
+	if lo then
+		local d = playerData:get(player)
+		if d then
+			d.runes = lo.runes or {}
+			d.summonerSpell = lo.summonerSpell or d.summonerSpell
+		end
+	end
+	matchController.teams[player.UserId] = team
+	matchController.gold[player.UserId] = matchController.gold[player.UserId] or 0
+	matchmaking:_setPlayerState(player, "in_match", nil)
+	Remotes.get("MatchStarted"):FireClient(player, team)
+	matchArrived[player.UserId] = true
+	playerData:replicate(player)
+	spawnInMatch(player, team)
+	-- Late arrivals still need the match clock + current score/stats.
+	scoreService:sendSnapshotTo(player)
+	-- All expected players here → start the match now rather than waiting out the timeout.
+	local allHere = true
+	for uid in pairs(matchExpected) do
+		if not matchArrived[uid] then
+			allHere = false
+			break
+		end
+	end
+	if allHere then
+		beginMatch()
+	end
+end
+
+-- =====================================================================
 -- Match lifecycle (callbacks from MatchmakingService)
 -- =====================================================================
 
 matchmaking.callbacks.onMatchStart = function(blueIds, redIds)
-	-- Clean any leftover minions from a previous match.
+	-- Lobby server: don't run the match here — reserve a private server and
+	-- teleport the paired group into it, carrying their loadouts.
+	if IS_LOBBY then
+		local players = {}
+		for _, uid in ipairs(blueIds) do
+			local p = Players:GetPlayerByUserId(uid)
+			if p then
+				table.insert(players, p)
+			end
+		end
+		for _, uid in ipairs(redIds) do
+			local p = Players:GetPlayerByUserId(uid)
+			if p then
+				table.insert(players, p)
+			end
+		end
+		if #players == 0 then
+			return
+		end
+		local loadouts = MatchTeleport.encodeLoadouts(players, playerData)
+		local ok, err = MatchTeleport.sendGroupToMatch(blueIds, redIds, players, loadouts)
+		if not ok then
+			warn("[Lobby] match teleport failed, returning group to lobby:", err)
+			for _, p in ipairs(players) do
+				matchmaking:_setPlayerState(p, "lobby", nil)
+				spawnInLobby(p)
+			end
+		end
+		return
+	end
+
+	-- Studio (local) server: run the match in this server (original behavior).
+	-- Clean any leftover minions from a previous match + fresh score sheet.
 	minionService:clearAll()
+	scoreService:resetMatch()
 	-- Assign teams explicitly (override auto-balance from MatchController).
 	matchController.teams = {}
 	for _, uid in ipairs(blueIds) do
@@ -491,14 +675,30 @@ matchmaking.callbacks.onMatchStart = function(blueIds, redIds)
 	end
 	towerService:initTowers()
 	minionService:startWaves()
+	jungleService:startSpawns()
+	scoreService:onMatchBegin()
 end
 
 matchmaking.callbacks.onMatchEnd = function()
 	minionService:stopWaves()
 	minionService:clearAll()
+	jungleService:stopAndClear()
 	towerService:reset()
 	-- Wipe per-team champion picks so the next match's select screen is clean.
 	championPicks = { Blue = {}, Red = {} }
+
+	-- Reserved match server: this instance is done. Carry everyone's loadout
+	-- back and teleport them to a public lobby server, then let Roblox shut this
+	-- empty reserved server down. (matchmaking:endMatch already fired MatchEnded
+	-- to the clients so they can show the result first.)
+	if IS_MATCH then
+		local players = Players:GetPlayers()
+		local loadouts = MatchTeleport.encodeLoadouts(players, playerData)
+		task.delay(MATCH_END_RETURN_DELAY, function()
+			MatchTeleport.sendToLobby(players, loadouts)
+		end)
+		return
+	end
 	-- Only players whose state just got reset to "lobby" by endMatch are returning
 	-- from this match. Anyone still in_zone is a leftover waiting for the next
 	-- pairing and must not be teleported.
@@ -580,13 +780,23 @@ Remotes.get("StartNow").OnServerEvent:Connect(function(player)
 end)
 
 Remotes.get("LeaveMatch").OnServerEvent:Connect(function(player)
-	if matchmaking:getState(player) == "in_match" then
+	if matchmaking:getState(player) ~= "in_match" then
+		return
+	end
+	if IS_MATCH then
+		-- On a reserved match server, leaving the match = leave this server.
+		-- leaveMatch updates state + runs the abandon check for the team left behind.
 		matchmaking:leaveMatch(player)
 		clearPickForPlayer(player)
-		combatService:unregister(player)
-		matchController:removePlayer(player)
-		spawnInLobby(player)
+		local loadouts = MatchTeleport.encodeLoadouts({ player }, playerData)
+		MatchTeleport.sendToLobby({ player }, loadouts)
+		return
 	end
+	matchmaking:leaveMatch(player)
+	clearPickForPlayer(player)
+	combatService:unregister(player)
+	matchController:removePlayer(player)
+	spawnInLobby(player)
 end)
 
 Remotes.get("BuyRune").OnServerEvent:Connect(function(player, runeKey, tier)
@@ -657,15 +867,50 @@ local function onPlayerAdded(player)
 	end
 	handledJoin[player.UserId] = true
 	playerData:register(player)
+
+	-- Reserved match server: this player was teleported in for a match. Read
+	-- their team + loadout from join data and drop them straight into it.
+	if IS_MATCH then
+		handleMatchArrival(player)
+		return
+	end
+
 	matchmaking:onPlayerJoined(player)
+	-- Restore a loadout carried back from a finished match, if present, so runes
+	-- bought before the match aren't lost on the round trip (no DataStore yet).
+	local jd = player:GetJoinData()
+	local td = jd and jd.TeleportData
+	if td and td.returning and td.loadouts then
+		local lo = td.loadouts[tostring(player.UserId)]
+		local d = lo and playerData:get(player)
+		if d then
+			d.runes = lo.runes or {}
+			d.summonerSpell = lo.summonerSpell or d.summonerSpell
+			if lo.gold then
+				d.gold = lo.gold
+			end
+		end
+	end
 	spawnInLobby(player)
 	task.wait(0.2)
 	playerData:replicate(player)
 	matchmaking:sendLobbyTimerTo(player)
 end
 
--- Kick off the global lobby-timer tick loop.
-matchmaking:startTimerLoop()
+-- A failed teleport (caught asynchronously) leaves the player on THIS lobby
+-- server — put them back in a clean lobby state instead of a limbo.
+if IS_LOBBY then
+	TeleportService.TeleportInitFailed:Connect(function(player, _result, errorMessage)
+		warn("[Lobby] TeleportInitFailed for", player.Name, "-", errorMessage)
+		matchmaking:_setPlayerState(player, "lobby", nil)
+		spawnInLobby(player)
+	end)
+end
+
+-- The lobby-timer tick loop only runs where matchmaking zones exist.
+if RUN_LOBBY then
+	matchmaking:startTimerLoop()
+end
 
 Players.PlayerAdded:Connect(onPlayerAdded)
 for _, player in ipairs(Players:GetPlayers()) do
@@ -684,6 +929,7 @@ Players.PlayerRemoving:Connect(function(player)
 	playerData:unregister(player)
 	combatService:unregister(player)
 	matchController:removePlayer(player)
+	shopService:removePlayer(player)
 	handledJoin[player.UserId] = nil
 end)
 
@@ -692,4 +938,4 @@ abilityHandler.isInMatch = function(player)
 	return matchmaking:getState(player) == "in_match"
 end
 
-print("[Server] BloxLegends ready — lobby + matchmaking online.")
+print(("[Server] BloxLegends ready — role: %s."):format(ROLE))

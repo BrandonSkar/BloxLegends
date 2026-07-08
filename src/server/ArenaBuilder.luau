@@ -286,18 +286,10 @@ local TOWER_SPECS = {
 	{ name = "RedTowerT3", team = "Red", tier = 3, basePos = Vector3.new(280, 0, 0), maxHP = 3000 }, -- center
 }
 
--- Build a detailed turret model — stepped stone base, central column with red
--- armor plates and gold trim, decorative spike crown, and a glowing red crystal
--- on top. Tier 3 (the nexus) uses a bigger, distinct crystal-heavy variant.
-local function buildTurretTower(parent, spec)
-	local model = Instance.new("Model")
-	model.Name = spec.name
-	model.Parent = parent
-
-	local colors = TOWER_TEAM_COLORS[spec.team]
-	local groundY = Config.GroundY or 0
-	local cx, cz = spec.basePos.X, spec.basePos.Z
-
+-- Both tower variants build from the same Slate-defaulted parts. This factory
+-- binds the part + vertical-cylinder helpers to one model (and its center) so
+-- the two builders share the bodies and their call sites stay terse.
+local function makeTowerHelpers(model, cx, cz, groundY)
 	local function newPart(name, props)
 		local p = Instance.new("Part")
 		p.Name = name
@@ -326,6 +318,23 @@ local function buildTurretTower(parent, spec)
 			Material = material or Enum.Material.Slate,
 		})
 	end
+
+	return newPart, newCylinder
+end
+
+-- Build a detailed turret model — stepped stone base, central column with red
+-- armor plates and gold trim, decorative spike crown, and a glowing red crystal
+-- on top. Tier 3 (the nexus) uses a bigger, distinct crystal-heavy variant.
+local function buildTurretTower(parent, spec)
+	local model = Instance.new("Model")
+	model.Name = spec.name
+	model.Parent = parent
+
+	local colors = TOWER_TEAM_COLORS[spec.team]
+	local groundY = Config.GroundY or 0
+	local cx, cz = spec.basePos.X, spec.basePos.Z
+
+	local newPart, newCylinder = makeTowerHelpers(model, cx, cz, groundY)
 
 	-- ===== Stepped stone platform =====
 	-- The widest cylinder is the root (carries the TowerTeam attributes).
@@ -458,31 +467,7 @@ local function buildNexusTower(parent, spec)
 	local groundY = Config.GroundY or 0
 	local cx, cz = spec.basePos.X, spec.basePos.Z
 
-	local function newPart(name, props)
-		local p = Instance.new("Part")
-		p.Name = name
-		p.Anchored = true
-		p.CanCollide = true
-		p.TopSurface = Enum.SurfaceType.Smooth
-		p.BottomSurface = Enum.SurfaceType.Smooth
-		p.Material = Enum.Material.Slate
-		for k, v in pairs(props) do
-			p[k] = v
-		end
-		p.Parent = model
-		return p
-	end
-
-	local function newCylinder(name, height, diameter, yBottom, color, material)
-		return newPart(name, {
-			Shape = Enum.PartType.Cylinder,
-			Size = Vector3.new(height, diameter, diameter),
-			CFrame = CFrame.new(cx, groundY + yBottom + height / 2, cz)
-				* CFrame.Angles(0, 0, math.rad(90)),
-			Color = color,
-			Material = material or Enum.Material.Slate,
-		})
-	end
+	local newPart, newCylinder = makeTowerHelpers(model, cx, cz, groundY)
 
 	-- ===== Wider stepped platform =====
 	local base = newCylinder("Base", 5, 34, 0, STONE_DARK)
@@ -601,24 +586,37 @@ local function buildTowers(parent)
 	end
 end
 
+-- A tall barrier ringing the arena so players can't walk off or get knocked off
+-- the map. Sits right on the floor perimeter (JungleFloor spans ±HalfLength ×
+-- ±HalfWidth). Idempotent — wipes any existing Boundary folder so it can be
+-- (re)applied to a saved arena that never baked walls in.
 local function buildBoundary(parent)
+	local old = parent:FindFirstChild("Boundary")
+	if old then
+		old:Destroy()
+	end
 	local folder = Instance.new("Folder")
 	folder.Name = "Boundary"
 	folder.Parent = parent
-	local hl = Config.Arena.HalfLength + 20
-	local hw = Config.Arena.HalfWidth + 20
+	local hl = Config.Arena.HalfLength
+	local hw = Config.Arena.HalfWidth
+	local height = 30
+	local t = 2 -- wall thickness
+	-- North/South run the full length (+corners); East/West span the width.
 	local walls = {
-		{ size = Vector3.new(hl * 2, 24, 2), pos = Vector3.new(0, 12, hw) },
-		{ size = Vector3.new(hl * 2, 24, 2), pos = Vector3.new(0, 12, -hw) },
-		{ size = Vector3.new(2, 24, hw * 2), pos = Vector3.new(hl, 12, 0) },
-		{ size = Vector3.new(2, 24, hw * 2), pos = Vector3.new(-hl, 12, 0) },
+		{ size = Vector3.new(hl * 2 + t * 2, height, t), pos = Vector3.new(0, 0, hw) },
+		{ size = Vector3.new(hl * 2 + t * 2, height, t), pos = Vector3.new(0, 0, -hw) },
+		{ size = Vector3.new(t, height, hw * 2), pos = Vector3.new(hl, 0, 0) },
+		{ size = Vector3.new(t, height, hw * 2), pos = Vector3.new(-hl, 0, 0) },
 	}
 	for _, w in ipairs(walls) do
 		makePart(folder, "Wall", {
 			Size = w.size,
-			Position = w.pos,
-			Color = Color3.fromRGB(80, 80, 90),
-			Transparency = 0.85,
+			Position = Vector3.new(w.pos.X, Config.GroundY + height / 2, w.pos.Z),
+			Color = Color3.fromRGB(90, 120, 160),
+			Material = Enum.Material.ForceField,
+			Transparency = 0.5,
+			CanQuery = false, -- don't let the barrier intercept click-targeting rays
 		})
 	end
 end
@@ -632,6 +630,9 @@ function ArenaBuilder.build()
 	-- to call buildTowers separately when the saved arena already has them.
 	local existing = workspace:FindFirstChild("Arena")
 	if existing then
+		-- Saved arena is used verbatim, but make sure it's walled in even if the
+		-- bake predates the boundary (buildBoundary is idempotent).
+		buildBoundary(existing)
 		return existing
 	end
 

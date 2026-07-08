@@ -6,6 +6,8 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 
+local PracticeBuilder = require(script.Parent:WaitForChild("PracticeBuilder"))
+
 local RecallService = {}
 RecallService.__index = RecallService
 
@@ -32,6 +34,12 @@ function RecallService.new(matchController, combatService, matchmaking)
 end
 
 local function getBasePos(self, player)
+	-- Practice-room players recall to the practice spawn, not the arena base
+	-- (which may not even exist on this server).
+	local entry = self.combatService:getEntry(player)
+	if entry and entry.practiceMode then
+		return PracticeBuilder.getSpawnPos()
+	end
 	local team = self.matchController:teamOf(player)
 	if not team then
 		return nil
@@ -42,6 +50,19 @@ end
 
 function RecallService:isChanneling(player)
 	return self.active[player.UserId] ~= nil
+end
+
+-- Authoritative "is this player standing in their base regen zone?" — used by
+-- the shop to gate purchases. Mirrors the InBaseChanged state pushed to clients.
+function RecallService:isInBase(player)
+	return self.inBaseState[player.UserId] or false
+end
+
+-- Forget the cached in-base state so the next tick re-emits InBaseChanged. Called
+-- when a player (re)enters a match so the client's shop gate re-syncs even if
+-- they happened to be "in base" at the end of the previous match.
+function RecallService:clearInBaseState(player)
+	self.inBaseState[player.UserId] = nil
 end
 
 function RecallService:tryStart(player)
@@ -149,7 +170,11 @@ function RecallService:_tick()
 		local root = char and char:FindFirstChild("HumanoidRootPart")
 		local basePos = getBasePos(self, player)
 		local inBase = false
-		if root and basePos then
+		if entry.practiceMode then
+			-- Practice room counts as "in base" everywhere: free shopping to
+			-- test builds, and constant regen between drills.
+			inBase = true
+		elseif root and basePos then
 			local d = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(basePos.X, 0, basePos.Z)).Magnitude
 			inBase = d <= Config.Recall.BaseRadius
 		end

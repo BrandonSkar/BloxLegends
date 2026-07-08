@@ -32,6 +32,10 @@ function CombatService:setRecallService(svc)
 	self.recallService = svc
 end
 
+function CombatService:setScoreService(svc)
+	self.scoreService = svc
+end
+
 local function newEntry(maxHP, walkSpeed)
 	return {
 		hp = maxHP,
@@ -50,6 +54,26 @@ local function newEntry(maxHP, walkSpeed)
 		selectingChampion = false,
 		championKey = nil,
 
+		-- In-match progression. Level scales max HP and damage (see
+		-- Config.Leveling); XP is intra-level progress toward xpToNext.
+		level = 1,
+		xp = 0,
+
+		-- Timed stat buffs (jungle camps, boss). Each: { key, stats, expiresAt }.
+		-- Expired entries are pruned lazily inside bonusOf/tempStat.
+		tempBuffs = {},
+
+		-- Kill attribution: enemies who damaged this player recently
+		-- ([userId] = window-expiry clock time) + who hit them last. Drives
+		-- kill credit for tower/minion/DoT deaths and assist payouts.
+		recentDamagers = {},
+		lastDamager = nil,
+		-- Respawn delay captured at the moment of death (scales with match time).
+		respawnDelay = nil,
+		-- Set for players in the practice room (changes recall destination /
+		-- shop gating).
+		practiceMode = false,
+
 		-- Status effects:
 		statuses = {
 			-- slow = { magnitude=0..1, expiresAt },
@@ -64,6 +88,35 @@ local function newEntry(maxHP, walkSpeed)
 		hots = {}, -- list of { healPerTick, interval, ticksLeft, nextTickAt }
 		attackBuff = nil, -- { bonusMult, expiresAt } — empowers next auto-attack
 	}
+end
+
+-- Sum a stat across ONLY the timed buffs (jungle/boss). Prunes expired
+-- entries as it walks. Kept separate from bonusOf because MoveSpeedPct from
+-- runes/items is already baked into baseSpeed — temp move speed must not be.
+local function tempStat(e, key)
+	local buffs = e.tempBuffs
+	if not buffs or #buffs == 0 then
+		return 0
+	end
+	local now = os.clock()
+	local total = 0
+	for i = #buffs, 1, -1 do
+		local b = buffs[i]
+		if b.expiresAt <= now then
+			table.remove(buffs, i)
+		elseif b.stats[key] then
+			total = total + b.stats[key]
+		end
+	end
+	return total
+end
+
+-- Sum a stat across a player's rune bonuses (entry.bonuses), item bonuses
+-- (entry.itemBonuses, set by ShopService), and timed buffs. All optional.
+local function bonusOf(e, key)
+	local r = (e.bonuses and e.bonuses[key]) or 0
+	local i = (e.itemBonuses and e.itemBonuses[key]) or 0
+	return r + i + tempStat(e, key)
 end
 
 function CombatService:register(player, maxHP, walkSpeed)
@@ -81,6 +134,106 @@ end
 function CombatService:isAlive(player)
 	local e = self.players[player.UserId]
 	return e and e.alive or false
+end
+
+-- Public stat lookup for other services (AbilityHandler reads AbilityPowerPct
+-- here so runes + items + timed buffs all funnel through one place).
+function CombatService:statBonus(player, key)
+	local e = self.players[player.UserId]
+	if not e then
+		return 0
+	end
+	return bonusOf(e, key)
+end
+
+-- Grant a timed stat buff (jungle camp / boss). Re-applying the same key
+-- refreshes rather than stacks. Fires StatusEffectChanged so the HUD shows a
+-- labeled countdown.
+function CombatService:applyTempBuff(player, key, stats, duration)
+	local e = self.players[player.UserId]
+	if not e or not e.alive then
+		return
+	end
+	for _, b in ipairs(e.tempBuffs) do
+		if b.key == key then
+			b.stats = stats
+			b.expiresAt = os.clock() + duration
+			Remotes.get("StatusEffectChanged"):FireClient(player, key, { duration = duration })
+			return
+		end
+	end
+	table.insert(e.tempBuffs, { key = key, stats = stats, expiresAt = os.clock() + duration })
+	Remotes.get("StatusEffectChanged"):FireClient(player, key, { duration = duration })
+end
+
+-- Recompute stats derived from champion + level + items + runes (max HP and
+-- base walk speed). Called on champion pick, level up, and item purchase.
+-- Raising max HP also heals the gain so you never "lose" the HP you earned.
+function CombatService:recomputeDerived(player)
+	local e = self.players[player.UserId]
+	local champ = e and e.championKey and Champions.Roster[e.championKey]
+	if not champ then
+		return
+	end
+	local ib = e.itemBonuses or {}
+	local runeMS = (e.bonuses and e.bonuses.MoveSpeedPct) or 0
+	local newMax = math.floor(champ.MaxHP * Config.levelHPMult(e.level) + (ib.BonusMaxHP or 0) + 0.5)
+	local oldMax = e.maxHP or newMax
+	if newMax ~= oldMax then
+		e.maxHP = newMax
+		if e.alive then
+			e.hp = math.min(newMax, e.hp + math.max(0, newMax - oldMax))
+		else
+			e.hp = math.min(e.hp, newMax)
+		end
+		self:replicateHP(player)
+	end
+	e.baseSpeed = champ.WalkSpeed * (1 + (runeMS + (ib.MoveSpeedPct or 0)) / 100)
+end
+
+-- Update the level shown in the server-built nameplate billboard.
+local function updateNameplateLevel(player, level)
+	local char = player.Character
+	if not char then
+		return
+	end
+	char:SetAttribute("Level", level)
+	local head = char:FindFirstChild("Head")
+	local tag = head and head:FindFirstChild("TeamTag")
+	local label = tag and tag:FindFirstChildOfClass("TextLabel")
+	if label then
+		label.Text = ("[%d] %s"):format(level, player.DisplayName)
+	end
+end
+
+-- Award XP, handling level-ups (stat growth + broadcast). XP past the level
+-- cap is discarded.
+function CombatService:addXP(player, amount)
+	local e = self.players[player.UserId]
+	if not e or not amount or amount <= 0 then
+		return
+	end
+	local maxLevel = Config.Leveling.MaxLevel
+	if e.level >= maxLevel then
+		return
+	end
+	e.xp = e.xp + amount
+	local leveled = false
+	while e.level < maxLevel and e.xp >= Config.xpToNext(e.level) do
+		e.xp = e.xp - Config.xpToNext(e.level)
+		e.level = e.level + 1
+		leveled = true
+	end
+	if e.level >= maxLevel then
+		e.xp = 0
+	end
+	if leveled then
+		self:recomputeDerived(player)
+		updateNameplateLevel(player, e.level)
+		Remotes.get("LevelUp"):FireAllClients(player.UserId, e.level)
+	end
+	local toNext = (e.level >= maxLevel) and 0 or Config.xpToNext(e.level)
+	Remotes.get("XPChanged"):FireClient(player, e.level, e.xp, toNext)
 end
 
 function CombatService:isLocked(player)
@@ -150,6 +303,11 @@ function CombatService:damagePlayer(target, amount, attackerPlayer)
 	if e.statuses.damageReduction and e.statuses.damageReduction.expiresAt > now then
 		amount = amount * e.statuses.damageReduction.multiplier
 	end
+	-- Flat-percent armor from tank items (stacks multiplicatively with the above).
+	local drPct = math.clamp(bonusOf(e, "DamageReductionPct"), 0, 80)
+	if drPct > 0 then
+		amount = amount * (1 - drPct / 100)
+	end
 	-- Shield absorbs first.
 	if e.shield > 0 and e.shieldUntil > now then
 		local absorbed = math.min(e.shield, amount)
@@ -159,6 +317,16 @@ function CombatService:damagePlayer(target, amount, attackerPlayer)
 	end
 	if amount <= 0 then
 		return
+	end
+	-- Kill/assist attribution: remember enemy champions who damaged this
+	-- player recently. Tower/minion/DoT executions credit the last of these.
+	if attackerPlayer and attackerPlayer ~= target and self.matchController then
+		local aTeam = self.matchController:teamOf(attackerPlayer)
+		local vTeam = self.matchController:teamOf(target)
+		if aTeam and vTeam and aTeam ~= vTeam then
+			e.recentDamagers[attackerPlayer.UserId] = now + Config.Kill.AssistWindow
+			e.lastDamager = attackerPlayer.UserId
+		end
 	end
 	e.hp = math.max(0, e.hp - amount)
 	self:replicateHP(target)
@@ -177,14 +345,32 @@ function CombatService:damagePlayer(target, amount, attackerPlayer)
 	end
 	if e.hp <= 0 then
 		e.alive = false
-		e.deadUntil = now + Config.RespawnDelay
-		-- Clear all statuses on death.
+		-- Kill credit: the direct attacker if it was a champion, otherwise the
+		-- last champion who damaged them recently (tower/minion/DoT executes).
+		local killer = attackerPlayer
+		if not killer and e.lastDamager and (e.recentDamagers[e.lastDamager] or 0) > now then
+			killer = Players:GetPlayerByUserId(e.lastDamager)
+		end
+		local assistIds = {}
+		for uid, expiresAt in pairs(e.recentDamagers) do
+			if expiresAt > now and (not killer or uid ~= killer.UserId) then
+				table.insert(assistIds, uid)
+			end
+		end
+		e.recentDamagers = {}
+		e.lastDamager = nil
+		-- Death timer scales with match time; captured now so the death screen
+		-- countdown and the actual respawn agree.
+		e.respawnDelay = (self.scoreService and self.scoreService:currentRespawnDelay()) or Config.RespawnDelay
+		e.deadUntil = now + e.respawnDelay
+		-- Clear all statuses (and timed buffs — you lose those on death).
 		e.statuses = {}
 		e.dots = {}
 		e.hots = {}
 		e.shield = 0
 		e.shieldUntil = 0
 		e.attackBuff = nil
+		e.tempBuffs = {}
 		if char then
 			local humanoid = char:FindFirstChildOfClass("Humanoid")
 			if humanoid then
@@ -192,6 +378,9 @@ function CombatService:damagePlayer(target, amount, attackerPlayer)
 			end
 		end
 		self:onTargetRemoved("player", target.UserId)
+		if self.scoreService then
+			self.scoreService:onChampionDeath(target, killer, assistIds, e.respawnDelay)
+		end
 	end
 end
 
@@ -435,6 +624,11 @@ local function effectiveWalkSpeed(e, now)
 		return 0
 	end
 	local base = e.baseSpeed * e.speedMult
+	-- Timed buffs only — rune/item move speed is already baked into baseSpeed.
+	local buffMS = tempStat(e, "MoveSpeedPct")
+	if buffMS ~= 0 then
+		base = base * (1 + buffMS / 100)
+	end
 	if e.statuses.slow and e.statuses.slow.expiresAt > now then
 		base = base * (1 - e.statuses.slow.magnitude)
 	end
@@ -547,8 +741,16 @@ function CombatService:_tick(dt)
 				local travelTime = profile.TravelTime or 0
 				local attackRange = profile.Range or Config.AutoAttack.Range
 				local attackInterval = profile.Interval or Config.AutoAttack.Interval
+				-- Attack-speed bonus (runes + items) shortens the interval.
+				local asPct = math.clamp(bonusOf(e, "AttackSpeedPct"), 0, 60)
+				if asPct > 0 then
+					attackInterval = attackInterval * (1 - asPct / 100)
+				end
 				local windUpDuration = profile.WindUp or 0.2
-				local baseDamage = profile.Damage or Config.AutoAttack.Damage
+				-- Champion level scales the base hit; flat attack power (runes +
+				-- items + buffs) is added on top.
+				local baseDamage = (profile.Damage or Config.AutoAttack.Damage) * Config.levelDamageMult(e.level)
+					+ bonusOf(e, "AttackPower")
 				local root = char and char:FindFirstChild("HumanoidRootPart")
 				-- Wind-up is a CHARGE timer: starts when the player stops moving,
 				-- cancels the moment they start moving again. Only when stillness

@@ -26,6 +26,10 @@ function TowerService:setMinionService(svc)
 	self.minionService = svc
 end
 
+function TowerService:setScoreService(svc)
+	self.scoreService = svc
+end
+
 -- Normalize whatever the user typed into the TowerTeam attribute.
 -- Accepts "Blue", "blue", "BLUE", " Blue " etc.; returns "Blue" / "Red" / nil.
 local function normalizeTeam(raw)
@@ -437,6 +441,10 @@ function TowerService:applyDamage(entry, amount, killerPlayer)
 		if killerPlayer and self.matchController then
 			self.matchController:addGold(killerPlayer, entry.goldReward)
 		end
+		-- Team-wide gold/XP + the "tower destroyed" announcement.
+		if self.scoreService then
+			self.scoreService:onTowerDestroyed(entry, killerPlayer)
+		end
 		-- Hide the WHOLE tower model (base + dome + turret + anything else
 		-- under the same Model). We don't actually destroy the parts since
 		-- they're user-placed in Studio — they get restored on match end.
@@ -499,7 +507,7 @@ local function nearestEnemyMinion(self, tower)
 	local best, bestDist
 	local towerPos = tower.root.Position
 	for _, m in pairs(self.minionService:allMinions()) do
-		if m.alive and m.team ~= tower.team then
+		if m.alive and m.team ~= tower.team and not m.isJungle and not m.isDummy then
 			local d = (m.root.Position - towerPos).Magnitude
 			if d <= tower.range then
 				if not bestDist or d < bestDist then

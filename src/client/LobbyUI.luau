@@ -208,8 +208,10 @@ function LobbyUI.create(playerGui)
 		Size = UDim2.fromScale(1, 1),
 	})
 
-	-- ---------------- Start Now button (testing) ----------------
-	local startNowBtn = newButton(screen, "Start Now (test)", Color3.fromRGB(140, 100, 60), {
+	-- ---------------- Start Now button ----------------
+	-- In production this only starts a match the matchmaker could already
+	-- form from the current zone groups (it just skips the remaining timer).
+	local startNowBtn = newButton(screen, "Start Match Now", Color3.fromRGB(140, 100, 60), {
 		Name = "StartNowBtn",
 		AnchorPoint = Vector2.new(0.5, 0),
 		Position = UDim2.new(0.5, 0, 0, 70),

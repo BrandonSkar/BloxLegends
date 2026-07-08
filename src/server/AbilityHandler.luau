@@ -5,6 +5,7 @@ local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Champions = require(Shared:WaitForChild("Champions"))
+local Config = require(Shared:WaitForChild("Config"))
 local Runes = require(Shared:WaitForChild("Runes"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 
@@ -150,7 +151,7 @@ end
 -- Status-effect application helpers
 -- ============================================================================
 
-local function applyStatusOnHit(self, targetPlayer, status, casterPos)
+local function applyStatusOnHit(self, targetPlayer, status, casterPos, attackerPlayer)
 	if not status then
 		return
 	end
@@ -162,7 +163,9 @@ local function applyStatusOnHit(self, targetPlayer, status, casterPos)
 	elseif t == "root" then
 		self.combatService:applyRoot(targetPlayer, status.duration)
 	elseif t == "dot" then
-		self.combatService:applyDoT(targetPlayer, status.damagePerTick, status.interval, status.ticks)
+		-- Pass the caster through as the DoT source so a burn that finishes a
+		-- champion credits the kill (and cancels their recall correctly).
+		self.combatService:applyDoT(targetPlayer, status.damagePerTick, status.interval, status.ticks, attackerPlayer)
 	elseif t == "knockup" then
 		self.combatService:applyKnockup(targetPlayer, status.height, status.duration)
 	elseif t == "knockback" and casterPos then
@@ -197,6 +200,20 @@ end
 -- ============================================================================
 
 local function applyAreaDamage(self, attackerPlayer, attackerTeam, center, radius, damage, statusOnHit, healAlliesAmount, shieldAlliesAmount, shieldAlliesDuration)
+	-- Support items amplify the heals / shields the caster lands on allies.
+	if (healAlliesAmount or shieldAlliesAmount) and attackerPlayer then
+		local ce = self.combatService:getEntry(attackerPlayer)
+		local hsp = (ce and ce.itemBonuses and ce.itemBonuses.HealShieldPowerPct) or 0
+		if hsp > 0 then
+			local mult = 1 + hsp / 100
+			if healAlliesAmount then
+				healAlliesAmount = healAlliesAmount * mult
+			end
+			if shieldAlliesAmount then
+				shieldAlliesAmount = shieldAlliesAmount * mult
+			end
+		end
+	end
 	-- Enemy minions
 	for _, entry in pairs(self.minionService:allMinions()) do
 		if entry.alive and entry.team ~= attackerTeam then
@@ -218,7 +235,7 @@ local function applyAreaDamage(self, attackerPlayer, attackerTeam, center, radiu
 					if damage and damage > 0 then
 						self.combatService:damagePlayer(player, damage, attackerPlayer)
 					end
-					applyStatusOnHit(self, player, statusOnHit, center)
+					applyStatusOnHit(self, player, statusOnHit, center, attackerPlayer)
 				else
 					if healAlliesAmount and healAlliesAmount > 0 then
 						self.combatService:healPlayer(player, healAlliesAmount)
@@ -280,7 +297,7 @@ local function fireProjectile(self, attackerPlayer, attackerTeam, ability, origi
 			local casterChar = attackerPlayer.Character
 			local casterRoot = casterChar and casterChar:FindFirstChild("HumanoidRootPart")
 			local casterPos = casterRoot and casterRoot.Position or origin
-			applyStatusOnHit(self, p, statusOnHit, casterPos)
+			applyStatusOnHit(self, p, statusOnHit, casterPos, attackerPlayer)
 			return true
 		end
 		return false
@@ -405,7 +422,7 @@ local function fireLineSkillshot(self, attackerPlayer, attackerTeam, ability, or
 				local root = char and char:FindFirstChild("HumanoidRootPart")
 				if root and flatDist(root.Position, pos) <= width then
 					self.combatService:damagePlayer(p, ability.Damage, attackerPlayer)
-					applyStatusOnHit(self, p, statusOnHit, origin)
+					applyStatusOnHit(self, p, statusOnHit, origin, attackerPlayer)
 					hitChampions[p.UserId] = true
 				end
 			end
@@ -562,7 +579,7 @@ local function targetCast(self, attackerPlayer, attackerTeam, ability, targetTyp
 		if damage > 0 then
 			self.combatService:damagePlayer(victimPlayer, damage, attackerPlayer)
 		end
-		applyStatusOnHit(self, victimPlayer, ability.StatusOnHit, originPos)
+		applyStatusOnHit(self, victimPlayer, ability.StatusOnHit, originPos, attackerPlayer)
 	else
 		if damage > 0 then
 			self.minionService:applyDamage(minionEntry, damage, attackerPlayer)
@@ -631,7 +648,7 @@ local function leapToTarget(self, attackerPlayer, attackerTeam, ability, targetT
 	if ability.Damage and ability.Damage > 0 then
 		self.combatService:damagePlayer(victim, ability.Damage, attackerPlayer)
 	end
-	applyStatusOnHit(self, victim, ability.StatusOnHit, casterRoot.Position)
+	applyStatusOnHit(self, victim, ability.StatusOnHit, casterRoot.Position, attackerPlayer)
 	return true
 end
 
@@ -779,11 +796,13 @@ function AbilityHandler:_handleCast(player, slot, direction, targetPos, targetTy
 		return
 	end
 
-	-- Ability-power scaling on Damage (for damage-bearing abilities).
-	local apBonus = (entry.bonuses and entry.bonuses.AbilityPowerPct or 0) / 100
+	-- Ability-power scaling on Damage (runes + items + timed jungle buffs, all
+	-- summed by CombatService), plus champion-level damage growth.
+	local apBonus = self.combatService:statBonus(player, "AbilityPowerPct") / 100
+	local levelMult = Config.levelDamageMult(entry.level or 1)
 	local scaledAbility = ability
 	if ability.Damage then
-		scaledAbility = setmetatable({ Damage = ability.Damage * (1 + apBonus) }, { __index = ability })
+		scaledAbility = setmetatable({ Damage = ability.Damage * (1 + apBonus) * levelMult }, { __index = ability })
 	end
 
 	local char = player.Character
@@ -860,7 +879,9 @@ function AbilityHandler:_handleCast(player, slot, direction, targetPos, targetTy
 		selfBuff(self, player, ability)
 		ok = true
 	elseif t == "self_heal" then
-		self.combatService:healPlayer(player, ability.HealAmount or 0)
+		local heal = ability.HealAmount or 0
+		local hsp = (entry.itemBonuses and entry.itemBonuses.HealShieldPowerPct) or 0
+		self.combatService:healPlayer(player, heal * (1 + hsp / 100))
 		ok = true
 	elseif t == "combo" then
 		-- Summoner spell combo (existing): heal + speed
